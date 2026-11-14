@@ -134,7 +134,7 @@ binabot/
 │   │   ├── user.py         user menus
 │   │   └── admin.py        admin panel
 │   └── tools/probe.py      one-request check of a link against Bina.az
-├── tests/                  61 automated tests + smoke_process.py
+├── tests/                  65 automated tests + smoke_process.py
 └── deploy/                 systemd unit, backup script
 ```
 

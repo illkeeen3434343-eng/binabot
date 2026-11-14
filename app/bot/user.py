@@ -3,6 +3,7 @@ subscription requests. A user can only ever touch their own links: every link is
 loaded with (link_id AND user_id)."""
 from __future__ import annotations
 
+import json
 import time
 
 from aiogram import F, Router
@@ -137,7 +138,7 @@ async def link_view(c: CallbackQuery, ctx: Ctx, user):
 async def link_edit_ask(c: CallbackQuery, ctx: Ctx, user):
     l, _ = await _own_link(c, ctx, user)
     if l:
-        await show(c, T.CONFIRM_EDIT.format(url=T.esc(l["url"])),
+        await show(c, T.CONFIRM_EDIT.format(url=T.show_url(l["url"])),
                    kb([(T.BTN_YES, f"l:ey:{l['id']}"), (T.BTN_NO, f"l:v:{l['id']}")], nav(f"l:v:{l['id']}")))
 
 
@@ -153,7 +154,7 @@ async def link_edit_go(c: CallbackQuery, ctx: Ctx, user):
 async def link_del_ask(c: CallbackQuery, ctx: Ctx, user):
     l, _ = await _own_link(c, ctx, user)
     if l:
-        await show(c, T.CONFIRM_DELETE.format(url=T.esc(l["url"])),
+        await show(c, T.CONFIRM_DELETE.format(url=T.show_url(l["url"])),
                    kb([(T.BTN_YES, f"l:dy:{l['id']}"), (T.BTN_NO, f"l:v:{l['id']}")], nav(f"l:v:{l['id']}")))
 
 
@@ -166,14 +167,39 @@ async def link_del_go(c: CallbackQuery, ctx: Ctx, user):
 
 
 # ------------------------------------------------------------------ text input
+TG_CHUNK = 4000          # Telegram cuts a long text into messages of 4096 characters
+
+
+async def _whole_text(m: Message, ctx: Ctx, uid: int):
+    """A link longer than 4096 characters arrives as several messages: glue them.
+    Returns the complete text, or None while more parts are expected."""
+    key = f"buf:{uid}"
+    text = m.text.strip()
+    raw = await ctx.db.kv_get(key, "")
+    if raw:
+        buf = json.loads(raw)
+        if time.time() - buf["t"] < 120:
+            text = buf["text"] + text
+        await ctx.db.kv_set(key, "")
+    if len(m.text) >= TG_CHUNK:
+        await ctx.db.kv_set(key, json.dumps({"t": time.time(), "text": text}))
+        return None
+    return text
+
+
 @router.message(F.text)
 async def text_input(m: Message, ctx: Ctx, user):
     uid, state = user["user_id"], user["state"] or ""
+    text = await _whole_text(m, ctx, uid)
+    if text is None:
+        return                                       # the rest of the link is on its way
+    if not state and "bina.az" in text.lower() and " " not in text:
+        state = "add_link"                           # a pasted link works without pressing the button
     if not (state == "add_link" or state.startswith("edit_link:")):
         return await m.answer(T.UNKNOWN_INPUT, reply_markup=main_kb(ctx.cfg.is_admin(uid)))
     retry = kb([(T.BTN_CANCEL, "m:links")], nav())
     try:
-        parsed = parse_link(m.text, ctx.lmap, ctx.cfg.unknown_params)
+        parsed = parse_link(text, ctx.lmap, ctx.cfg.unknown_params)
     except LinkError as e:                                   # nothing is saved or activated
         if e.kind == "invalid":
             return await m.answer(T.INVALID_LINK, reply_markup=retry)

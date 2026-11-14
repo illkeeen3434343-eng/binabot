@@ -37,6 +37,7 @@ LINK_NOT_FOUND = "Link tapılmadı."
 CONFIRM_EDIT = "Bu linki dəyişmək istədiyinizə əminsiniz?\n\n<code>{url}</code>"
 CONFIRM_DELETE = "Bu linki silmək istədiyinizə əminsiniz?\n\n<code>{url}</code>"
 CANCELLED = "Əməliyyat ləğv edildi."
+LINK_PART = "⏳ Uzun link hissə-hissə gəlir, davamı gözlənilir…"
 UNKNOWN_INPUT = "Zəhmət olmasa, aşağıdakı düymələrdən istifadə edin."
 NO_ACCESS = "Bu bölməyə icazəniz yoxdur."
 IGNORED_PARAMS = "\n\nℹ️ Bu filtrlər nəzərə alınmır: <code>{params}</code>"
@@ -133,8 +134,13 @@ def links_screen(links, max_links) -> str:
 
 
 def link_card(n, url, created, tz, paused=False) -> str:
-    t = f"🔗 <b>Link {n}</b>\n\n<code>{esc(url)}</code>\n\nƏlavə olunub: {fmt_dt(created, tz)}"
+    t = f"🔗 <b>Link {n}</b>\n\n<code>{show_url(url)}</code>\n\nƏlavə olunub: {fmt_dt(created, tz)}"
     return t + ("\n\n⏸ Bu link cari planın limitindən kənardadır və izlənmir." if paused else "")
+
+
+def show_url(url, n=500) -> str:
+    """Escaped link for a message body; very long links are cut (Telegram allows 4096 chars)."""
+    return esc(url if len(url) <= n else url[:n] + "…")
 
 
 def short_url(url, n=38) -> str:

@@ -40,6 +40,7 @@ class FakeSession(BaseSession):
             return True
         if isinstance(method, (SendMessage, EditMessageText, SendPhoto)):
             text = getattr(method, "text", None) or getattr(method, "caption", None)
+            assert len(text) <= (1024 if isinstance(method, SendPhoto) else 4096), "Telegram would refuse this"
             kind = "photo" if isinstance(method, SendPhoto) else "text"
             self.out.append((int(method.chat_id), text, method.reply_markup, kind))
             return Message(message_id=self._id, date=dt.datetime.now(), chat=Chat(id=int(method.chat_id), type="private"), text=text)
@@ -201,7 +202,7 @@ async def test_edit_and_delete_need_confirmation_and_cancel_keeps_link(tg):
     assert await db.count_links(U1) == 0
     # pressing a button abandons a pending text dialogue
     await tg.click(U1, "l:add"); await tg.click(U1, "m:links")
-    assert await tg.text(U1, URL_A) == T.UNKNOWN_INPUT and await db.count_links(U1) == 0
+    assert await tg.text(U1, "salam") == T.UNKNOWN_INPUT and await db.count_links(U1) == 0
 
 
 async def test_user_cannot_touch_another_users_link(tg):
@@ -314,3 +315,41 @@ async def test_handler_crash_reaches_admin(tg):
     tg.env.db.count_links = boom
     await tg.press(U1, "m:status")
     assert "db is on fire" in tg.last(ADMIN) and "Xəta" in tg.last(ADMIN)
+
+
+LINK2 = ("https://bina.az/baki/alqi-satqi/menziller?room_ids%5B%5D=2&room_ids%5B%5D=3&room_ids%5B%5D=4"
+         "&has_bill_of_sale=true&has_mortgage=true")
+LONG = ("https://bina.az/baki/alqi-satqi/menziller/yeni-tikili?room_ids%5B%5D=2&room_ids%5B%5D=3&room_ids%5B%5D=4"
+        "&has_bill_of_sale=true&has_mortgage=true&has_repair=true&floor_first=false"
+        + "".join(f"&location_ids%5B%5D={i}" for i in range(1, 201)))
+
+
+async def test_very_long_link_split_by_telegram_into_several_messages(tg):
+    env, db = tg.env, tg.env.db
+    assert len(LONG) > 4096
+    await approve(tg, U1, "pro")
+    await tg.click(U1, "m:home"); await tg.click(U1, "m:links"); await tg.click(U1, "l:add")
+    n = len(tg.s.out)
+    await tg.text(U1, LONG[:4096])                         # part 1: bot waits silently
+    assert len(tg.s.out) == n and await db.count_links(U1) == 0
+    assert "Link əlavə olundu" in await tg.text(U1, LONG[4096:])
+    link = (await db.user_links(U1))[0]
+    assert link["url"].count("location_ids") == 200
+    # every screen that shows the link stays inside Telegram's 4096-character limit (asserted in FakeSession)
+    await tg.click(U1, f"l:v:{link['id']}"); await tg.click(U1, f"l:e:{link['id']}")
+    await tg.click(U1, f"l:v:{link['id']}"); await tg.click(U1, f"l:d:{link['id']}")
+    await tg.click(ADMIN, f"a:ul:{U1}"); await tg.click(ADMIN, f"a:ld:{link['id']}")
+    # and the search is really sent to Bina.az with all 200 districts
+    await env.mon.run_cycle()
+    import json as _j
+    assert len(_j.loads(env.http.calls[-1][1]["variables"])["filter"]["locationIds"]) == 200
+
+
+async def test_pasted_link_is_accepted_without_pressing_add_first(tg):
+    db = tg.env.db
+    await approve(tg, U1, "pro")
+    assert "Link əlavə olundu" in await tg.text(U1, LINK2)          # straight from the main menu
+    await tg.click(U1, "l:add")
+    assert await tg.text(U1, LINK2) == T.DUPLICATE_LINK
+    await tg.text(U2, "/start")
+    assert "aktiv abunəliyiniz olmalıdır" in await tg.text(U2, LINK2) and await db.count_links(U2) == 0

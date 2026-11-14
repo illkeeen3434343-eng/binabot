@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, quote, urlsplit
 
 ALLOWED_HOSTS = {"bina.az", "www.bina.az", "ru.bina.az", "m.bina.az"}
-MAX_URL_LEN = 2000
+MAX_URL_LEN = 20000        # Bina.az links with ~170 districts are ~4 500 characters
 
 
 class LinkError(Exception):

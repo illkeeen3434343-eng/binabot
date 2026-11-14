@@ -269,7 +269,7 @@ async def reactivate(c: CallbackQuery, ctx: Ctx):
 async def user_links(c: CallbackQuery, ctx: Ctx):
     uid = _uid(c)
     links = await ctx.db.user_links(uid)
-    lines = [f"{i}. <code>{T.esc(l['url'])}</code>" + (f"\n   ⚠️ {T.esc(l['last_error'])}" if l["last_error"] else "")
+    lines = [f"{i}. <code>{T.show_url(l['url'], 350)}</code>" + (f"\n   ⚠️ {T.esc(l['last_error'])}" if l["last_error"] else "")
              for i, l in enumerate(links, 1)]
     rows = [[(f"🗑 {i}. {T.short_url(l['url'], 30)}", f"a:ld:{l['id']}")] for i, l in enumerate(links, 1)]
     await show(c, "🔗 <b>İstifadəçinin linkləri</b>\n\n" + ("\n".join(lines) or "Link yoxdur."),
@@ -281,7 +281,7 @@ async def link_del_ask(c: CallbackQuery, ctx: Ctx):
     l = await ctx.db.get_link(_uid(c))
     if not l:
         return await c.answer(T.LINK_NOT_FOUND, show_alert=True)
-    await show(c, T.CONFIRM_DELETE.format(url=T.esc(l["url"])),
+    await show(c, T.CONFIRM_DELETE.format(url=T.show_url(l["url"])),
                kb([(T.BTN_YES, f"a:ldy:{l['id']}"), (T.BTN_NO, f"a:ul:{l['user_id']}")], nav(f"a:ul:{l['user_id']}")))
 
 
@@ -291,8 +291,8 @@ async def link_del_go(c: CallbackQuery, ctx: Ctx):
     if not l:
         return await c.answer(T.LINK_NOT_FOUND, show_alert=True)
     await ctx.db.delete_link(l["id"])
-    await _audit(ctx, c, "delete_link", l["user_id"], l["url"])
-    await ctx.msg.user(l["user_id"], T.LINK_REMOVED_BY_ADMIN.format(url=T.esc(l["url"])))
+    await _audit(ctx, c, "delete_link", l["user_id"], l["url"][:300])
+    await ctx.msg.user(l["user_id"], T.LINK_REMOVED_BY_ADMIN.format(url=T.show_url(l["url"])))
     await _card(c, ctx, l["user_id"], T.LINK_DELETED)
 
 

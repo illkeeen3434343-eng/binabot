@@ -107,7 +107,8 @@ async def main():
              asyncio.create_task(loop("jobs", jobs.tick, 60, alerts))]
     log.info("bot started; admins=%s db=%s", sorted(cfg.admin_ids), cfg.db_path)
     try:
-        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+        # one update at a time: keeps the parts of a split long link in order
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query"], handle_as_tasks=False)
     finally:
         for t in tasks:
             t.cancel()
