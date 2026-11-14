@@ -63,7 +63,8 @@ Then in Telegram: `/start` (every user), `/admin` (admins only).
 `bina_map.json` translates a link to a Bina.az filter. Shipped entries are the ones
 proven by the existing project (Bakı, alqı-satqı, mənzillər, rooms, locations, price,
 area, çıxarış, ipoteka, first/last floor) plus `has_repair` (checked locally on each
-ad) and `kiraye` (rent → `leased: true`, **verify with the probe**). Any other
+ad), `menziller/yeni-tikili` and `menziller/kohne-tikili` (category ids 2 and 3 — the probe
+self-checks them) and `kiraye` (rent → `leased: true`, **verify with the probe**). Any other
 category or filter is rejected with a clear message instead of being guessed.
 To add one: open the search on bina.az with F12 → Network, look at the `variables`
 of the `SearchItems` request, add the id / parameter name to `bina_map.json`, then

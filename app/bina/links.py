@@ -36,6 +36,7 @@ class LinkMap:
         self.cities = data.get("cities", {})
         self.deals = data.get("deals", {})
         self.categories = data.get("categories", {})
+        self.subcategories = data.get("subcategories", {})     # "category/sub" -> categoryId
         self.list_params = data.get("list_params", {})
         self.number_params = data.get("number_params", {})
         self.bool_params = data.get("bool_params", {})
@@ -100,6 +101,9 @@ def parse_link(raw: str, lmap: LinkMap, unknown: str = "reject") -> ParsedLink:
             raise LinkError("unsupported", f"category {segs[0]!r}")
         f["categoryId"] = lmap.categories[segs[0]]
         path.append(segs.pop(0))
+        if segs and f"{path[-1]}/{segs[0]}" in lmap.subcategories:
+            f["categoryId"] = lmap.subcategories[f"{path[-1]}/{segs[0]}"]
+            path.append(segs.pop(0))
     if segs:
         raise LinkError("unsupported", f"extra path {'/'.join(segs)!r}")
 

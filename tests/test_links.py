@@ -66,3 +66,17 @@ def test_rent_and_no_city():
 def test_unknown_param_policy_ignore():
     p = parse_link("https://bina.az/baki/alqi-satqi/menziller?mystery=1", M, unknown="ignore")
     assert p.ignored == ("mystery",) and "mystery" not in p.url
+
+
+def test_subcategory_link_reported_by_user():
+    p = parse_link("https://bina.az/baki/alqi-satqi/menziller/yeni-tikili?room_ids%5B%5D=2&room_ids%5B%5D=3"
+                   "&room_ids%5B%5D=4&has_bill_of_sale=true&has_mortgage=true&has_repair=true&floor_first=false"
+                   "&location_ids%5B%5D=51&location_ids%5B%5D=2&location_ids%5B%5D=33&location_ids%5B%5D=54"
+                   "&location_ids%5B%5D=52&location_ids%5B%5D=4&location_ids%5B%5D=53&location_ids%5B%5D=1", M)
+    assert p.filter == {"cityId": "1", "leased": False, "categoryId": "2", "hasBillOfSale": True,
+                        "hasMortgage": True, "floorFirst": False, "roomIds": ["2", "3", "4"],
+                        "locationIds": ["1", "2", "4", "33", "51", "52", "53", "54"]}
+    assert p.client_filter == {"has_repair": True}
+    assert p.url.startswith("https://bina.az/baki/alqi-satqi/menziller/yeni-tikili?")
+    old = parse_link("https://bina.az/baki/alqi-satqi/menziller/kohne-tikili", M)
+    assert old.filter["categoryId"] == "3" and old.url != parse_link("https://bina.az/baki/alqi-satqi/menziller", M).url

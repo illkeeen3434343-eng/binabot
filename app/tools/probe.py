@@ -36,6 +36,18 @@ async def main(url: str):
         print("HTTP       :", r.status, "| total on Bina.az:", total, "| next page:", bool(cursor))
         if edges:
             print("node fields:", ", ".join(sorted(edges[0]["node"].keys())))
+        sub = {v: k for k, v in LinkMap.load(cfg.map_path).subcategories.items()}
+        if p.filter.get("categoryId") in sub:
+            # self-check of the sub-category ids: new-build + old-build must add up to all apartments
+            totals = {}
+            for cid in ("1", "2", "3"):
+                rr = await client._get(GRAPHQL_URL, params=client._params({**p.filter, "categoryId": cid}, None),
+                                       headers=API_HEADERS)
+                totals[cid] = parse_search_payload(rr.json())[2]
+                await asyncio.sleep(2)
+            ok = None not in totals.values() and totals["2"] + totals["3"] == totals["1"] and totals["2"] != totals["1"]
+            print(f"category check: menziller={totals['1']}  yeni-tikili={totals['2']}  kohne-tikili={totals['3']}  ->",
+                  "OK (2 + 3 = 1)" if ok else "MISMATCH - sub-category ids in bina_map.json are probably wrong")
         for a in ads[:8]:
             print(f"  {a.id}  {a.price} {a.currency}  {a.rooms} otaq  {a.area} {a.area_units}  "
                   f"{a.floor}/{a.floors}  {a.location}  promoted={a.promoted}  photo={'yes' if a.photo else 'no'}")
