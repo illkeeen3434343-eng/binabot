@@ -44,7 +44,7 @@ Then in Telegram: `/start` (every user), `/admin` (admins only).
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q            # 65 tests, no internet needed
+.venv/bin/python -m pytest -q            # 64 tests, no internet needed
 .venv/bin/python tests/smoke_process.py  # starts the real process against a fake Telegram API
 ```
 
