@@ -14,7 +14,7 @@ from aiogram.types import CallbackQuery, Message
 
 from .. import texts as T
 from ..plans import ORDER, PLANS, ST_ACTIVE, ST_EXPIRED, ST_PENDING, ST_REJECTED, ST_SUSPENDED
-from .common import Ctx, kb, nav, show
+from .common import KEYBOARD_ACTIONS, Ctx, ack, kb, nav, show
 
 PAGE = 8
 DURATIONS = [(30, "30 gün"), (90, "90 gün"), (180, "180 gün"), (365, "365 gün")]
@@ -27,7 +27,7 @@ class IsAdmin(BaseFilter):
 
 class AdminState(BaseFilter):
     async def __call__(self, event, user) -> bool:
-        return (user["state"] or "").startswith("adm_")
+        return (user["state"] or "").startswith("adm_") and getattr(event, "text", None) not in KEYBOARD_ACTIONS
 
 
 router = Router(name="admin")
@@ -139,7 +139,7 @@ async def approve_ask(c: CallbackQuery, ctx: Ctx):
     uid = _uid(c)
     u = await ctx.db.get_user(uid)
     if not u:
-        return await c.answer("İstifadəçi tapılmadı.", show_alert=True)
+        return await ack(c, "İstifadəçi tapılmadı.", True)
     plan = u["requested_plan"] or u["plan"] or "basic"
     await show(c, f"👤 {T.user_line(u)}\nPlan: <b>{T.plan_title(plan)}</b>\n\n{T.CHOOSE_DURATION}",
                _duration_kb("a:ad", uid, f"a:u:{uid}"))
@@ -182,7 +182,7 @@ async def plan_set(c: CallbackQuery, ctx: Ctx):
     uid, plan = _uid(c), c.data.split(":")[3]
     u = await ctx.db.get_user(uid)
     if not u or plan not in PLANS:
-        return await c.answer()
+        return await ack(c)
     if u["status"] != ST_ACTIVE:                 # no running subscription: plan + period = activation
         await ctx.db.set_user(uid, requested_plan=plan, requested_at=int(time.time()))
         return await show(c, f"Plan: <b>{T.plan_title(plan)}</b>\n\n{T.CHOOSE_DURATION}",
@@ -280,7 +280,7 @@ async def user_links(c: CallbackQuery, ctx: Ctx):
 async def link_del_ask(c: CallbackQuery, ctx: Ctx):
     l = await ctx.db.get_link(_uid(c))
     if not l:
-        return await c.answer(T.LINK_NOT_FOUND, show_alert=True)
+        return await ack(c, T.LINK_NOT_FOUND, True)
     await show(c, T.CONFIRM_DELETE.format(url=T.show_url(l["url"])),
                kb([(T.BTN_YES, f"a:ldy:{l['id']}"), (T.BTN_NO, f"a:ul:{l['user_id']}")], nav(f"a:ul:{l['user_id']}")))
 
@@ -289,7 +289,7 @@ async def link_del_ask(c: CallbackQuery, ctx: Ctx):
 async def link_del_go(c: CallbackQuery, ctx: Ctx):
     l = await ctx.db.get_link(_uid(c))
     if not l:
-        return await c.answer(T.LINK_NOT_FOUND, show_alert=True)
+        return await ack(c, T.LINK_NOT_FOUND, True)
     await ctx.db.delete_link(l["id"])
     await _audit(ctx, c, "delete_link", l["user_id"], l["url"][:300])
     await ctx.msg.user(l["user_id"], T.LINK_REMOVED_BY_ADMIN.format(url=T.show_url(l["url"])))
@@ -361,4 +361,4 @@ async def run_now(c: CallbackQuery, ctx: Ctx):
     t = asyncio.create_task(job())
     ctx.tasks.add(t)
     t.add_done_callback(ctx.tasks.discard)
-    await c.answer("Monitorinq dövrü başladıldı.", show_alert=False)
+    await ack(c, "▶️ Monitorinq dövrü başladıldı.")

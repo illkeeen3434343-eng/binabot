@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from .. import texts as T
 from ..bina.links import LinkError, parse_link
 from ..plans import PLANS, ORDER, ST_ACTIVE, get_plan
-from .common import Ctx, kb, main_kb, nav, show
+from .common import KEYBOARD_ACTIONS, Ctx, ack, kb, main_kb, nav, press, show, show_home
 
 router = Router(name="user")
 
@@ -28,12 +28,23 @@ def _max_links(u) -> int:
 async def start(m: Message, ctx: Ctx, user):
     await ctx.db.set_state(user["user_id"], None)
     await m.answer(T.welcome(user["first_name"], user["status"] == ST_ACTIVE))
-    await m.answer(T.main_menu(user), reply_markup=main_kb(ctx.cfg.is_admin(user["user_id"])))
+    await show_home(m, ctx, user)
+
+
+@router.message(F.text.in_(KEYBOARD_ACTIONS))
+async def keyboard_button(m: Message, ctx: Ctx, user, dispatcher, bot):
+    """A button in the keyboard area: drop any half-finished dialogue and open the screen.
+    'Geri' opens the parent of the screen shown last."""
+    uid = user["user_id"]
+    await ctx.db.set_state(uid, None)
+    await ctx.db.kv_set(f"buf:{uid}", "")
+    target = KEYBOARD_ACTIONS[m.text] or await ctx.db.kv_get(f"back:{uid}", "m:home")
+    await press(dispatcher, bot, m.from_user, target)
 
 
 @router.callback_query(F.data == "m:home")
 async def home(c: CallbackQuery, ctx: Ctx, user):
-    await show(c, T.main_menu(user), main_kb(ctx.cfg.is_admin(user["user_id"])))
+    await show_home(c, ctx, user)
 
 
 @router.callback_query(F.data == "m:help")
@@ -62,7 +73,7 @@ async def subs(c: CallbackQuery, user):
 async def subs_pick(c: CallbackQuery):
     plan = c.data.split(":")[2]
     if plan not in PLANS:
-        return await c.answer()
+        return await ack(c)
     await show(c, T.subs_confirm(plan), kb([(T.BTN_SEND_REQUEST, f"s:c:{plan}")], nav("m:subs")))
 
 
@@ -70,7 +81,7 @@ async def subs_pick(c: CallbackQuery):
 async def subs_send(c: CallbackQuery, ctx: Ctx, user):
     plan = c.data.split(":")[2]
     if plan not in PLANS:
-        return await c.answer()
+        return await ack(c)
     uid = user["user_id"]
     if user["status"] == "suspended":
         return await show(c, T.SUSPENDED, kb(nav("m:subs")))
@@ -233,4 +244,4 @@ async def other_message(m: Message, ctx: Ctx, user):
 @router.callback_query()
 async def unknown_callback(c: CallbackQuery):
     """Anything not handled above - including admin buttons pressed by a non-admin."""
-    await c.answer(T.NO_ACCESS if (c.data or "").startswith("a:") else "…", show_alert=True)
+    await ack(c, T.NO_ACCESS if (c.data or "").startswith("a:") else "…", True)

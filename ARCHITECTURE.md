@@ -87,8 +87,10 @@ Statuses: `new` (registered, never requested) → `pending` → `active` | `reje
 
 ## 5. Workflows
 
-**User.** `/start` → registered, welcome, main menu `[📊 Statusum] [🔗 Linklərim]
-[💎 Abunəlik] [ℹ️ Kömək]`. Abunəlik → pick plan → confirm → `pending`, admins get
+**User.** `/start` → registered, welcome, and a permanent menu in the phone's
+keyboard area: `[📊 Statusum] [🔗 Linklərim] [💎 Abunəlik] [ℹ️ Kömək] [⬅️ Geri]
+[🏠 Ana səhifə]` (+ `[🛠 Admin panel]` for admins). A keyboard key opens its screen as
+a new message at the bottom of the chat; contextual actions stay as inline buttons. Abunəlik → pick plan → confirm → `pending`, admins get
 the request with ✅/❌. After approval: Linklərim → ➕ → paste link → validated,
 normalised, de-duplicated. Link card → ✏️ / 🗑, both behind a Bəli/Xeyr
 confirmation. Every sub-screen ends with `[⬅️ Geri] [🏠 Ana səhifə]`; Geri goes to
@@ -134,7 +136,7 @@ binabot/
 │   │   ├── user.py         user menus
 │   │   └── admin.py        admin panel
 │   └── tools/probe.py      one-request check of a link against Bina.az
-├── tests/                  64 automated tests + smoke_process.py
+├── tests/                  65 automated tests + smoke_process.py
 └── deploy/                 systemd unit, backup script
 ```
 

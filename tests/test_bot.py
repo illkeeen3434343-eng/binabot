@@ -64,6 +64,10 @@ class Tg:
         return self.last(uid)
 
     async def click(self, uid, data):
+        from app.bot.common import KEYBOARD_ACTIONS
+        label = next((k for k, v in KEYBOARD_ACTIONS.items() if v == data), None)
+        if data not in self.buttons(uid) and label in self.keys(uid):
+            return await self.text(uid, label)        # main sections live in the keyboard area
         assert data in self.buttons(uid), f"button {data!r} is not on {uid}'s screen: {self.buttons(uid)}"
         return await self.press(uid, data)
 
@@ -79,13 +83,24 @@ class Tg:
     def last(self, uid):
         return next((o[1] for o in reversed(self.s.out) if o[0] == uid), "")
 
+    def _inline(self, uid):
+        return next((o[2] for o in reversed(self.s.out) if o[0] == uid and hasattr(o[2], "inline_keyboard")), None)
+
     def buttons(self, uid):
-        mk = next((o[2] for o in reversed(self.s.out) if o[0] == uid and o[2]), None)
+        mk = self._inline(uid)
         return [b.callback_data for row in mk.inline_keyboard for b in row] if mk else []
 
     def labels(self, uid):
-        mk = next((o[2] for o in reversed(self.s.out) if o[0] == uid and o[2]), None)
+        mk = self._inline(uid)
         return [b.text for row in mk.inline_keyboard for b in row] if mk else []
+
+    def keys(self, uid):                          # the menu in the keyboard area
+        mk = next((o[2] for o in reversed(self.s.out) if o[0] == uid and hasattr(o[2], "keyboard")), None)
+        return [b.text for row in mk.keyboard for b in row] if mk else []
+
+    async def key(self, uid, label):
+        assert label in self.keys(uid), f"{label!r} is not in {uid}'s keyboard: {self.keys(uid)}"
+        return await self.text(uid, label)
 
     def all(self, uid):
         return [o[1] for o in self.s.out if o[0] == uid]
@@ -125,7 +140,8 @@ async def test_full_scenario_start_to_notifications(tg):
     u = await db.get_user(U1)
     assert (u["username"], u["first_name"], u["status"]) == ("user100", "Ad100", "new") and u["registered_at"]
     assert "Necə başlamaq olar" in tg.all(U1)[0]
-    assert tg.labels(U1) == [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_HELP]      # no admin button
+    assert tg.keys(U1) == [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_HELP, T.BTN_BACK, T.BTN_HOME]
+    await tg.text(ADMIN, "/start"); assert tg.keys(ADMIN)[-1] == T.BTN_ADMIN          # admins only
     # --- cannot add links before activation
     await tg.click(U1, "m:links")
     assert "aktiv abunəliyiniz olmalıdır" in await tg.click(U1, "l:add")
@@ -353,3 +369,36 @@ async def test_pasted_link_is_accepted_without_pressing_add_first(tg):
     assert await tg.text(U1, LINK2) == T.DUPLICATE_LINK
     await tg.text(U2, "/start")
     assert "aktiv abunəliyiniz olmalıdır" in await tg.text(U2, LINK2) and await db.count_links(U2) == 0
+
+
+async def test_keyboard_area_menu_home_back_and_sections(tg):
+    db = tg.env.db
+    await approve(tg, U1, "pro"); await tg.text(U1, LINK2)
+    lid = (await db.user_links(U1))[0]["id"]
+    n = len(tg.s.out)
+    assert "Statusum" in await tg.key(U1, T.BTN_STATUS)
+    assert len(tg.s.out) == n + 1                                   # a NEW message at the bottom, not an edit
+    assert "Linklərim" in await tg.key(U1, T.BTN_LINKS)
+    assert "Abunəlik planları" in await tg.key(U1, T.BTN_SUBS)
+    assert "Kömək" in await tg.key(U1, T.BTN_HELP)
+    # Geri = parent of the screen shown last, however it was opened
+    await tg.key(U1, T.BTN_LINKS); await tg.click(U1, f"l:v:{lid}"); await tg.click(U1, f"l:d:{lid}")
+    assert "Link 1" in await tg.key(U1, T.BTN_BACK)                 # confirm -> link card
+    assert "Linklərim" in await tg.key(U1, T.BTN_BACK)              # link card -> list
+    assert "Ana səhifə" in await tg.key(U1, T.BTN_BACK)             # list -> main menu
+    assert "Ana səhifə" in await tg.key(U1, T.BTN_BACK)             # already home
+    assert await db.count_links(U1) == 1                            # nothing was deleted on the way
+    await tg.key(U1, T.BTN_SUBS); await tg.click(U1, "s:p:platinum")
+    assert "Abunəlik planları" in await tg.key(U1, T.BTN_BACK)
+    assert "Ana səhifə" in await tg.key(U1, T.BTN_HOME) and T.BTN_HOME in tg.keys(U1)
+    # a menu key cancels a pending "send me the link" dialogue instead of being read as a link
+    await tg.key(U1, T.BTN_LINKS); await tg.click(U1, "l:add")
+    assert "Statusum" in await tg.key(U1, T.BTN_STATUS) and (await db.get_user(U1))["state"] is None
+    # admin key: admins get the panel, everybody else a refusal; date entry is not confused by keys
+    await tg.text(ADMIN, "/start")
+    assert "Admin panel" in await tg.key(ADMIN, T.BTN_ADMIN)
+    assert await tg.text(U1, T.BTN_ADMIN) == T.NO_ACCESS
+    await tg.click(ADMIN, "a:us:0"); await tg.click(ADMIN, f"a:u:{U1}"); await tg.click(ADMIN, f"a:ex:{U1}")
+    await tg.click(ADMIN, f"a:esc:{U1}")
+    assert f"[<code>{U1}</code>]" in await tg.key(ADMIN, T.BTN_BACK)   # back to the user card
+    assert "İstifadəçilər" in await tg.key(ADMIN, T.BTN_BACK) and "Admin panel" in await tg.key(ADMIN, T.BTN_BACK)

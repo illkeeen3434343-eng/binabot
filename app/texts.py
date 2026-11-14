@@ -38,7 +38,7 @@ CONFIRM_EDIT = "Bu linki dəyişmək istədiyinizə əminsiniz?\n\n<code>{url}</
 CONFIRM_DELETE = "Bu linki silmək istədiyinizə əminsiniz?\n\n<code>{url}</code>"
 CANCELLED = "Əməliyyat ləğv edildi."
 LINK_PART = "⏳ Uzun link hissə-hissə gəlir, davamı gözlənilir…"
-UNKNOWN_INPUT = "Zəhmət olmasa, aşağıdakı düymələrdən istifadə edin."
+UNKNOWN_INPUT = "Zəhmət olmasa, aşağıdakı menyu düymələrindən istifadə edin."
 NO_ACCESS = "Bu bölməyə icazəniz yoxdur."
 IGNORED_PARAMS = "\n\nℹ️ Bu filtrlər nəzərə alınmır: <code>{params}</code>"
 
@@ -75,7 +75,7 @@ def welcome(first_name, active: bool) -> str:
 
 def main_menu(u) -> str:
     return (f"🏠 <b>Ana səhifə</b>\n\nStatus: {STATUS.get(u['status'], u['status'])}\n"
-            f"Plan: {plan_title(u['plan'])}")
+            f"Plan: {plan_title(u['plan'])}\n\nMenyu aşağıda, klaviatura sahəsindədir 👇")
 
 
 HELP = ("ℹ️ <b>Kömək</b>\n\n"
