@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS audit (
     target_user INTEGER, details TEXT
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS usage (
+    user_id INTEGER NOT NULL, action TEXT NOT NULL, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, action, day)
+) WITHOUT ROWID;
 """
 
 
@@ -98,6 +102,9 @@ class Database:
         await self.c.execute("PRAGMA synchronous=NORMAL")
         await self.c.execute("PRAGMA foreign_keys=ON")
         await self.c.executescript(SCHEMA)
+        cols = {r[1] for r in await self._all("PRAGMA table_info(users)")}
+        if "note" not in cols:                      # migration for databases created before notes
+            await self.c.execute("ALTER TABLE users ADD COLUMN note TEXT")
         await self.c.commit()
         return self
 
@@ -400,6 +407,30 @@ class Database:
     async def recent_audit(self, limit=10):
         return await self._all("SELECT * FROM audit ORDER BY id DESC LIMIT ?", (limit,))
 
+    # ------------------------------------------------------------- usage statistics
+    async def track(self, user_id, action):
+        if not action:
+            return
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        await self._x("INSERT INTO usage(user_id, action, day, n) VALUES(?,?,?,1) "
+                      "ON CONFLICT(user_id, action, day) DO UPDATE SET n=n+1", (user_id, action, day))
+
+    async def usage_summary(self, days=7, top=8):
+        since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - (days - 1) * 86400))
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        return {
+            "active_today": await self._val("SELECT COUNT(DISTINCT user_id) FROM usage WHERE day=?", (today,)),
+            "active_period": await self._val("SELECT COUNT(DISTINCT user_id) FROM usage WHERE day>=?", (since,)),
+            "actions": await self._all("SELECT action, SUM(n) n FROM usage WHERE day>=? AND action NOT LIKE 'a:%' "
+                                       "GROUP BY action ORDER BY n DESC LIMIT ?", (since, top)),
+            "users": await self._all("SELECT user_id, SUM(n) n FROM usage WHERE day>=? AND action NOT LIKE 'a:%' "
+                                     "GROUP BY user_id ORDER BY n DESC LIMIT ?", (since, top)),
+        }
+
+    async def active_user_ids(self):
+        rows = await self._all("SELECT user_id FROM users WHERE status=? AND blocked_bot=0", (ST_ACTIVE,))
+        return [r[0] for r in rows]
+
     # ------------------------------------------------------------- housekeeping
     async def prune(self, keep_days=60):
         cut = now_ts() - keep_days * 86400
@@ -411,3 +442,4 @@ class Database:
                       "(SELECT ad_id FROM deliveries WHERE status='queued')", (cut,))
         await self._x("DELETE FROM errors WHERE ts<?", (cut,))
         await self._x("DELETE FROM cycles WHERE started_at<?", (cut,))
+        await self._x("DELETE FROM usage WHERE day<?", (time.strftime("%Y-%m-%d", time.gmtime(cut)),))

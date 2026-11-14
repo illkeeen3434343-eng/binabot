@@ -80,26 +80,34 @@ Key decisions
 | `cycles` | monitoring runs | started_at, searches_ok/failed, new_ads, note |
 | `errors` | scraper / bot errors | ts, source, code, message |
 | `audit` | admin actions | ts, admin_id, action, target_user, details |
-| `kv` | small persistent state | cool-down, max listing ID, last report day |
+| `kv` | small persistent state | cool-down, max listing ID, last report day, each user's current menu |
+| `usage` | button / action counters | PK(user_id, action, day) |
 
 Statuses: `new` (registered, never requested) → `pending` → `active` | `rejected`;
 `active` → `suspended` ↔ `active`; `active` → `expired` (validity ended).
 
 ## 5. Workflows
 
-**User.** `/start` → registered, welcome, and a permanent menu in the phone's
-keyboard area: `[📊 Statusum] [🔗 Linklərim] [💎 Abunəlik] [ℹ️ Kömək] [⬅️ Geri]
-[🏠 Ana səhifə]` (+ `[🛠 Admin panel]` for admins). A keyboard key opens its screen as
-a new message at the bottom of the chat; contextual actions stay as inline buttons. Abunəlik → pick plan → confirm → `pending`, admins get
-the request with ✅/❌. After approval: Linklərim → ➕ → paste link → validated,
-normalised, de-duplicated. Link card → ✏️ / 🗑, both behind a Bəli/Xeyr
-confirmation. Every sub-screen ends with `[⬅️ Geri] [🏠 Ana səhifə]`; Geri goes to
-the parent screen, Ana səhifə always to the main menu.
+**Menus.** Every screen's buttons are shown in the phone's **keyboard area** and
+replace the previous screen's buttons (`bot/common.py: show()` stores "label →
+action" per user in the DB; `nav_router` turns a tapped label back into the action).
+`⬅️ Geri` appears only on sub-screens and leads to the parent; `🏠 Ana səhifə` is
+added only when Geri does not already lead home. Inline buttons remain only under
+messages the bot sends on its own (e.g. Approve / Reject under a request).
+
+**User.** `/start` → registered, welcome, main menu `[📊 Statusum] [🔗 Linklərim]
+[💎 Abunəlik] [✉️ Əlaqə] [ℹ️ Kömək]`. Abunəlik → pick plan → confirm → `pending`,
+admins get the request with ✅/❌. After approval: Linklərim → ➕ → paste link →
+validated, normalised, de-duplicated (a pasted link also works from any screen).
+Link → ✏️ / 🗑, both behind a Bəli/Xeyr confirmation. Əlaqə → one text or photo
+(e.g. a payment receipt) is forwarded to the admins. `/cancel` leaves any dialogue.
 
 **Admin** (`/admin`, IDs from `ADMIN_IDS`, checked on every update): requests →
 approve (choose 30/90/180/365 days or type a date) / reject; users list → user card
 → plan, expiry, suspend / reactivate, links (view / remove); statistics; system
-health (last cycle, cool-down, recent errors); audit log; run a cycle now.
+health (last cycle, cool-down, recent errors); audit log; run a cycle now; message
+one user (text / photo), note on a user, broadcast to all active users (with
+confirmation), usage statistics (active users, most used actions).
 
 **Ad lifecycle.** detected → `queued` for every entitled link owner → `sent` when
 the user's rolling window has room → otherwise waits; `expired` after
@@ -136,7 +144,7 @@ binabot/
 │   │   ├── user.py         user menus
 │   │   └── admin.py        admin panel
 │   └── tools/probe.py      one-request check of a link against Bina.az
-├── tests/                  65 automated tests + smoke_process.py
+├── tests/                  67 automated tests + smoke_process.py
 └── deploy/                 systemd unit, backup script
 ```
 

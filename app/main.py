@@ -14,7 +14,7 @@ from aiogram.types import BotCommand, BotCommandScopeChat, ErrorEvent
 from .bina.client import BinaClient, Http
 from .bina.links import LinkMap
 from .bot import admin, user
-from .bot.common import Ctx, RegisterMiddleware
+from .bot.common import Ctx, RegisterMiddleware, nav_router
 from .config import load_config
 from .db import Database
 from .services.alerts import Alerts
@@ -44,6 +44,7 @@ def build_dispatcher(ctx: Ctx, alerts: Alerts | None = None) -> AioDispatcher:
     mw = RegisterMiddleware()
     dp.message.outer_middleware(mw)
     dp.callback_query.outer_middleware(mw)
+    dp.include_router(nav_router)            # keyboard-area keys -> actions
     dp.include_router(admin.router)          # admin first: its filter lets non-admins fall through
     dp.include_router(user.router)
 
@@ -92,10 +93,12 @@ async def main():
     ctx = Ctx(cfg=cfg, db=db, lmap=LinkMap.load(cfg.map_path), monitor=monitor, dispatcher=dispatcher, msg=msg)
     dp = build_dispatcher(ctx, alerts)
 
-    await bot.set_my_commands([BotCommand(command="start", description="Ana səhifə")])
+    await bot.set_my_commands([BotCommand(command="start", description="Ana səhifə"),
+                               BotCommand(command="cancel", description="Əməliyyatı ləğv et")])
     for aid in cfg.admin_ids:
         try:
             await bot.set_my_commands([BotCommand(command="start", description="Ana səhifə"),
+                                       BotCommand(command="cancel", description="Əməliyyatı ləğv et"),
                                        BotCommand(command="admin", description="Admin panel")],
                                       scope=BotCommandScopeChat(chat_id=aid))
         except Exception:

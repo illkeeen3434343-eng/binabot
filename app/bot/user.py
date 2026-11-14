@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from .. import texts as T
 from ..bina.links import LinkError, parse_link
 from ..plans import PLANS, ORDER, ST_ACTIVE, get_plan
-from .common import KEYBOARD_ACTIONS, Ctx, ack, kb, main_kb, nav, press, show, show_home
+from .common import Ctx, ack, kb, nav, show, show_home
 
 router = Router(name="user")
 
@@ -27,19 +27,9 @@ def _max_links(u) -> int:
 @router.message(CommandStart())
 async def start(m: Message, ctx: Ctx, user):
     await ctx.db.set_state(user["user_id"], None)
+    await ctx.db.track(user["user_id"], "/start")
     await m.answer(T.welcome(user["first_name"], user["status"] == ST_ACTIVE))
     await show_home(m, ctx, user)
-
-
-@router.message(F.text.in_(KEYBOARD_ACTIONS))
-async def keyboard_button(m: Message, ctx: Ctx, user, dispatcher, bot):
-    """A button in the keyboard area: drop any half-finished dialogue and open the screen.
-    'Geri' opens the parent of the screen shown last."""
-    uid = user["user_id"]
-    await ctx.db.set_state(uid, None)
-    await ctx.db.kv_set(f"buf:{uid}", "")
-    target = KEYBOARD_ACTIONS[m.text] or await ctx.db.kv_get(f"back:{uid}", "m:home")
-    await press(dispatcher, bot, m.from_user, target)
 
 
 @router.callback_query(F.data == "m:home")
@@ -177,6 +167,30 @@ async def link_del_go(c: CallbackQuery, ctx: Ctx, user):
         await _links_screen(c, ctx, user, T.LINK_DELETED)
 
 
+# ------------------------------------------------------------------ contact the admin
+@router.callback_query(F.data == "m:contact")
+async def contact(c: CallbackQuery, ctx: Ctx, user):
+    await ctx.db.set_state(user["user_id"], "contact")
+    await show(c, T.CONTACT_ASK, kb([(T.BTN_CANCEL, "m:home")]))
+
+
+async def _contact_send(m: Message, ctx: Ctx, user, kind: str, payload: str):
+    uid = user["user_id"]
+    buttons = kb([("↩️ Cavab yaz", f"a:msg:{uid}"), ("👤 İstifadəçi", f"a:u:{uid}")])
+    for aid in ctx.cfg.admin_ids:
+        await ctx.msg.deliver(aid, kind, payload, T.contact_header(user), buttons)
+    await ctx.db.set_state(uid, None)
+    await ctx.db.track(uid, "contact")
+    await show_home(m, ctx, user, T.CONTACT_SENT)
+
+
+@router.message(F.photo)
+async def photo_input(m: Message, ctx: Ctx, user):
+    if (user["state"] or "") != "contact":
+        return await show_home(m, ctx, user, T.UNKNOWN_INPUT)
+    await _contact_send(m, ctx, user, "photo", f"{m.photo[-1].file_id}|{T.esc(m.caption or '')}")
+
+
 # ------------------------------------------------------------------ text input
 TG_CHUNK = 4000          # Telegram cuts a long text into messages of 4096 characters
 
@@ -201,36 +215,39 @@ async def _whole_text(m: Message, ctx: Ctx, uid: int):
 @router.message(F.text)
 async def text_input(m: Message, ctx: Ctx, user):
     uid, state = user["user_id"], user["state"] or ""
+    if state == "contact":
+        return await _contact_send(m, ctx, user, "text", T.esc(m.text))
     text = await _whole_text(m, ctx, uid)
     if text is None:
         return                                       # the rest of the link is on its way
     if not state and "bina.az" in text.lower() and " " not in text:
         state = "add_link"                           # a pasted link works without pressing the button
     if not (state == "add_link" or state.startswith("edit_link:")):
-        return await m.answer(T.UNKNOWN_INPUT, reply_markup=main_kb(ctx.cfg.is_admin(uid)))
+        return await show_home(m, ctx, user, T.UNKNOWN_INPUT)
     retry = kb([(T.BTN_CANCEL, "m:links")], nav())
     try:
         parsed = parse_link(text, ctx.lmap, ctx.cfg.unknown_params)
     except LinkError as e:                                   # nothing is saved or activated
         if e.kind == "invalid":
-            return await m.answer(T.INVALID_LINK, reply_markup=retry)
-        return await m.answer(T.UNSUPPORTED_LINK.format(detail=T.esc(e.detail)), reply_markup=retry)
+            return await show(m, T.INVALID_LINK, retry)
+        return await show(m, T.UNSUPPORTED_LINK.format(detail=T.esc(e.detail)), retry)
     note = T.IGNORED_PARAMS.format(params=T.esc(", ".join(parsed.ignored))) if parsed.ignored else ""
     if state == "add_link":
         problem = await _may_add(ctx, user)                  # re-check: status may have changed
         if problem:
             await ctx.db.set_state(uid, None)
-            return await m.answer(problem, reply_markup=kb(nav("m:links")))
+            return await show(m, problem, kb(nav("m:links")))
         if await ctx.db.add_link(uid, parsed) is None:
-            return await m.answer(T.DUPLICATE_LINK, reply_markup=retry)
+            return await show(m, T.DUPLICATE_LINK, retry)
         done = T.LINK_ADDED
+        await ctx.db.track(uid, "link_added")
     else:
         link_id = int(state.split(":")[1])
         if not await ctx.db.get_link(link_id, uid):
             await ctx.db.set_state(uid, None)
-            return await m.answer(T.LINK_NOT_FOUND, reply_markup=kb(nav("m:links")))
+            return await show(m, T.LINK_NOT_FOUND, kb(nav("m:links")))
         if not await ctx.db.update_link(link_id, uid, parsed):
-            return await m.answer(T.DUPLICATE_LINK, reply_markup=retry)
+            return await show(m, T.DUPLICATE_LINK, retry)
         done = T.LINK_UPDATED
     await ctx.db.set_state(uid, None)
     await _links_screen(m, ctx, user, done + note)
@@ -238,7 +255,7 @@ async def text_input(m: Message, ctx: Ctx, user):
 
 @router.message()
 async def other_message(m: Message, ctx: Ctx, user):
-    await m.answer(T.UNKNOWN_INPUT, reply_markup=main_kb(ctx.cfg.is_admin(user["user_id"])))
+    await show_home(m, ctx, user, T.UNKNOWN_INPUT)
 
 
 @router.callback_query()

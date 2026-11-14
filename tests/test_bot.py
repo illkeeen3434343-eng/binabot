@@ -64,11 +64,12 @@ class Tg:
         return self.last(uid)
 
     async def click(self, uid, data):
-        from app.bot.common import KEYBOARD_ACTIONS
-        label = next((k for k, v in KEYBOARD_ACTIONS.items() if v == data), None)
-        if data not in self.buttons(uid) and label in self.keys(uid):
-            return await self.text(uid, label)        # main sections live in the keyboard area
-        assert data in self.buttons(uid), f"button {data!r} is not on {uid}'s screen: {self.buttons(uid)}"
+        """Tap a visible button: a key of the current keyboard-area menu, or an inline
+        button under a message the bot sent on its own."""
+        label = next((k for k, v in self._map(uid).items() if v == data), None)
+        if label is not None:
+            return await self.text(uid, label)
+        assert data in self.inline(uid), f"{data!r} is not visible to {uid}: keys={self._map(uid)} inline={self.inline(uid)}"
         return await self.press(uid, data)
 
     async def press(self, uid, data):             # forged callback, button need not be visible
@@ -80,26 +81,42 @@ class Tg:
                         "from": {"id": 999, "is_bot": True, "first_name": "bot"}, "text": "old"}}}))
         return self.last(uid)
 
+    async def photo(self, uid, caption=None):
+        self.n += 1
+        await self.dp.feed_update(self.bot, Update.model_validate({"update_id": self.n, "message": {
+            "message_id": self.n, "date": int(time.time()), "chat": {"id": uid, "type": "private"},
+            "from": self._user(uid), "photo": [{"file_id": "FILE1", "file_unique_id": "u", "width": 9, "height": 9}],
+            **({"caption": caption} if caption else {})}}))
+        return self.last(uid)
+
     def last(self, uid):
         return next((o[1] for o in reversed(self.s.out) if o[0] == uid), "")
 
-    def _inline(self, uid):
-        return next((o[2] for o in reversed(self.s.out) if o[0] == uid and hasattr(o[2], "inline_keyboard")), None)
+    def _map(self, uid):                          # label -> action of the keyboard-area menu
+        import json, sqlite3
+        con = sqlite3.connect(self.env.cfg.db_path)
+        row = con.execute("SELECT value FROM kv WHERE key=?", (f"kbmap:{uid}",)).fetchone()
+        con.close()
+        return json.loads(row[0]) if row and row[0] else {}
+
+    def inline(self, uid):
+        return [b.callback_data for o in self.s.out if o[0] == uid and hasattr(o[2], "inline_keyboard")
+                for row in o[2].inline_keyboard for b in row]
 
     def buttons(self, uid):
-        mk = self._inline(uid)
-        return [b.callback_data for row in mk.inline_keyboard for b in row] if mk else []
+        return list(self._map(uid).values())
 
     def labels(self, uid):
-        mk = self._inline(uid)
-        return [b.text for row in mk.inline_keyboard for b in row] if mk else []
+        return list(self._map(uid))
 
-    def keys(self, uid):                          # the menu in the keyboard area
+    keys = labels
+
+    def shown_keys(self, uid):                    # what Telegram actually displays in the keyboard area
         mk = next((o[2] for o in reversed(self.s.out) if o[0] == uid and hasattr(o[2], "keyboard")), None)
         return [b.text for row in mk.keyboard for b in row] if mk else []
 
     async def key(self, uid, label):
-        assert label in self.keys(uid), f"{label!r} is not in {uid}'s keyboard: {self.keys(uid)}"
+        assert label in self._map(uid), f"{label!r} is not in {uid}'s keyboard: {list(self._map(uid))}"
         return await self.text(uid, label)
 
     def all(self, uid):
@@ -115,8 +132,9 @@ async def tg(env):
     env.disp = Dispatcher(env.db, env.cfg, env.msg, env.client, per_tick=100)
     env.jobs = Jobs(env.db, env.cfg, env.msg, env.mon)
     env.ctx = Ctx(cfg=env.cfg, db=env.db, lmap=env.lmap, monitor=env.mon, dispatcher=env.disp, msg=env.msg)
-    from app.bot import admin, user
-    admin.router._parent_router = user.router._parent_router = None   # test-only: fresh dispatcher per test
+    from app.bot import admin, common, user
+    for r in (admin.router, user.router, common.nav_router):          # test-only: fresh dispatcher per test
+        r._parent_router = None
     t = Tg(build_dispatcher(env.ctx, env.alerts), bot, session)
     t.env = env
     return t
@@ -140,7 +158,7 @@ async def test_full_scenario_start_to_notifications(tg):
     u = await db.get_user(U1)
     assert (u["username"], u["first_name"], u["status"]) == ("user100", "Ad100", "new") and u["registered_at"]
     assert "Necə başlamaq olar" in tg.all(U1)[0]
-    assert tg.keys(U1) == [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_HELP, T.BTN_BACK, T.BTN_HOME]
+    assert tg.keys(U1) == tg.shown_keys(U1) == [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_CONTACT, T.BTN_HELP]
     await tg.text(ADMIN, "/start"); assert tg.keys(ADMIN)[-1] == T.BTN_ADMIN          # admins only
     # --- cannot add links before activation
     await tg.click(U1, "m:links")
@@ -149,7 +167,7 @@ async def test_full_scenario_start_to_notifications(tg):
     await tg.click(U1, "m:subs"); await tg.click(U1, "s:p:pro")
     assert "sorğunuz adminə göndərildi" in await tg.click(U1, "s:c:pro") and "Kart: 0000" in tg.last(U1)
     assert (await db.get_user(U1))["status"] == "pending"
-    assert "Yeni abunəlik sorğusu" in tg.last(ADMIN) and tg.buttons(ADMIN)[:2] == [f"a:ap:{U1}", f"a:rj:{U1}"]
+    assert "Yeni abunəlik sorğusu" in tg.last(ADMIN) and tg.inline(ADMIN)[-3:-1] == [f"a:ap:{U1}", f"a:rj:{U1}"]
     await tg.click(U1, "m:home")
     assert "Gözləmədə" in await tg.click(U1, "m:status")
     # --- admin approves with an expiry date -> active
@@ -196,7 +214,8 @@ async def test_navigation_back_and_home(tg):
     assert "Ana səhifə" in await tg.click(U1, "m:home")
     for screen in ("m:status", "m:subs", "m:help"):
         await tg.click(U1, screen)
-        assert tg.buttons(U1)[-2:] == ["m:home", "m:home"] and tg.labels(U1)[-2:] == [T.BTN_BACK, T.BTN_HOME]
+        assert tg.buttons(U1)[-1] == "m:home" and tg.labels(U1)[-1] == T.BTN_BACK    # one level deep: Geri only
+        assert T.BTN_HOME not in tg.labels(U1)
         await tg.click(U1, "m:home")
 
 
@@ -218,7 +237,7 @@ async def test_edit_and_delete_need_confirmation_and_cancel_keeps_link(tg):
     assert await db.count_links(U1) == 0
     # pressing a button abandons a pending text dialogue
     await tg.click(U1, "l:add"); await tg.click(U1, "m:links")
-    assert await tg.text(U1, "salam") == T.UNKNOWN_INPUT and await db.count_links(U1) == 0
+    assert (await tg.text(U1, "salam")).startswith(T.UNKNOWN_INPUT) and await db.count_links(U1) == 0
 
 
 async def test_user_cannot_touch_another_users_link(tg):
@@ -241,7 +260,7 @@ async def test_admin_area_is_closed_to_non_admins(tg):
         n = len(tg.s.out)
         await tg.press(U2, data)
         assert tg.s.alerts == [T.NO_ACCESS] and len(tg.s.out) == n
-    assert await tg.text(U2, "/admin") == T.UNKNOWN_INPUT
+    assert (await tg.text(U2, "/admin")).startswith(T.UNKNOWN_INPUT)
     await db.set_state(U2, f"adm_date:adc:{U2}")
     await tg.text(U2, "31.12.2030")
     assert (await db.get_user(U2))["status"] == "new" and (await db.get_user(U1))["status"] == "active"
@@ -371,34 +390,97 @@ async def test_pasted_link_is_accepted_without_pressing_add_first(tg):
     assert "aktiv abunəliyiniz olmalıdır" in await tg.text(U2, LINK2) and await db.count_links(U2) == 0
 
 
-async def test_keyboard_area_menu_home_back_and_sections(tg):
+async def test_keyboard_area_shows_only_the_current_screens_buttons(tg):
     db = tg.env.db
     await approve(tg, U1, "pro"); await tg.text(U1, LINK2)
     lid = (await db.user_links(U1))[0]["id"]
+    await tg.text(U1, "/start")
+    home = [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_CONTACT, T.BTN_HELP]
+    assert tg.shown_keys(U1) == home                                # no Geri / Ana səhifə on the main menu
     n = len(tg.s.out)
-    assert "Statusum" in await tg.key(U1, T.BTN_STATUS)
-    assert len(tg.s.out) == n + 1                                   # a NEW message at the bottom, not an edit
-    assert "Linklərim" in await tg.key(U1, T.BTN_LINKS)
-    assert "Abunəlik planları" in await tg.key(U1, T.BTN_SUBS)
-    assert "Kömək" in await tg.key(U1, T.BTN_HELP)
-    # Geri = parent of the screen shown last, however it was opened
-    await tg.key(U1, T.BTN_LINKS); await tg.click(U1, f"l:v:{lid}"); await tg.click(U1, f"l:d:{lid}")
+    assert "Linklərim" in await tg.key(U1, T.BTN_LINKS) and len(tg.s.out) == n + 1   # new message at the bottom
+    assert tg.shown_keys(U1) == ["1. baki/alqi-satqi/menziller?has_bill_of…", T.BTN_ADD_LINK, T.BTN_BACK]
+    assert T.BTN_STATUS not in tg.keys(U1)                          # previous menu is gone
+    await tg.click(U1, f"l:v:{lid}")
+    assert tg.shown_keys(U1) == [T.BTN_EDIT, T.BTN_DELETE, T.BTN_BACK, T.BTN_HOME]   # deeper: both appear
+    await tg.key(U1, T.BTN_DELETE)
+    assert tg.shown_keys(U1) == [T.BTN_YES, T.BTN_NO, T.BTN_BACK, T.BTN_HOME]
     assert "Link 1" in await tg.key(U1, T.BTN_BACK)                 # confirm -> link card
-    assert "Linklərim" in await tg.key(U1, T.BTN_BACK)              # link card -> list
-    assert "Ana səhifə" in await tg.key(U1, T.BTN_BACK)             # list -> main menu
-    assert "Ana səhifə" in await tg.key(U1, T.BTN_BACK)             # already home
-    assert await db.count_links(U1) == 1                            # nothing was deleted on the way
-    await tg.key(U1, T.BTN_SUBS); await tg.click(U1, "s:p:platinum")
-    assert "Abunəlik planları" in await tg.key(U1, T.BTN_BACK)
-    assert "Ana səhifə" in await tg.key(U1, T.BTN_HOME) and T.BTN_HOME in tg.keys(U1)
-    # a menu key cancels a pending "send me the link" dialogue instead of being read as a link
-    await tg.key(U1, T.BTN_LINKS); await tg.click(U1, "l:add")
-    assert "Statusum" in await tg.key(U1, T.BTN_STATUS) and (await db.get_user(U1))["state"] is None
-    # admin key: admins get the panel, everybody else a refusal; date entry is not confused by keys
+    assert "Linklərim" in await tg.key(U1, T.BTN_BACK)              # card -> list
+    assert "Ana səhifə" in await tg.key(U1, T.BTN_BACK) and tg.shown_keys(U1) == home
+    assert await db.count_links(U1) == 1
+    await tg.key(U1, T.BTN_LINKS); await tg.click(U1, f"l:v:{lid}")
+    assert "Ana səhifə" in await tg.key(U1, T.BTN_HOME) and tg.shown_keys(U1) == home
+    # a stale key (not on the current screen) is not an action any more
+    assert (await tg.text(U1, T.BTN_DELETE)).startswith(T.UNKNOWN_INPUT) and await db.count_links(U1) == 1
+    # while the bot waits for a link, the only keys are Cancel / Home, and they cancel the dialogue
+    await tg.key(U1, T.BTN_LINKS); await tg.key(U1, T.BTN_ADD_LINK)
+    assert tg.shown_keys(U1) == [T.BTN_CANCEL, T.BTN_HOME]
+    assert "Linklərim" in await tg.key(U1, T.BTN_CANCEL) and (await db.get_user(U1))["state"] is None
+    # /cancel works from anywhere
+    await tg.key(U1, T.BTN_ADD_LINK)
+    assert (await tg.text(U1, "/cancel")).startswith(T.CANCELLED) and (await db.get_user(U1))["state"] is None
+    # admin panel lives in the keyboard area too; a non-admin typing its label gets nothing
     await tg.text(ADMIN, "/start")
-    assert "Admin panel" in await tg.key(ADMIN, T.BTN_ADMIN)
-    assert await tg.text(U1, T.BTN_ADMIN) == T.NO_ACCESS
+    assert "Admin panel" in await tg.key(ADMIN, T.BTN_ADMIN) and "📢 Hamıya mesaj" in tg.shown_keys(ADMIN)
+    assert (await tg.text(U1, T.BTN_ADMIN)).startswith(T.UNKNOWN_INPUT)
     await tg.click(ADMIN, "a:us:0"); await tg.click(ADMIN, f"a:u:{U1}"); await tg.click(ADMIN, f"a:ex:{U1}")
     await tg.click(ADMIN, f"a:esc:{U1}")
-    assert f"[<code>{U1}</code>]" in await tg.key(ADMIN, T.BTN_BACK)   # back to the user card
+    assert f"[<code>{U1}</code>]" in await tg.key(ADMIN, T.BTN_CANCEL)
     assert "İstifadəçilər" in await tg.key(ADMIN, T.BTN_BACK) and "Admin panel" in await tg.key(ADMIN, T.BTN_BACK)
+
+
+async def test_contact_admin_reply_note_and_broadcast(tg):
+    db = tg.env.db
+    await approve(tg, U1); await approve(tg, U2)
+    await tg.text(U1, "/start")
+    # user -> admins (text, then a photo such as a payment receipt)
+    assert "Əlaqə" in await tg.key(U1, T.BTN_CONTACT)
+    assert (await tg.text(U1, "Ödəniş etdim <b>")).startswith(T.CONTACT_SENT)
+    got = tg.last(ADMIN)
+    assert "Yeni müraciət" in got and "Ad100" in got and "Ödəniş etdim &lt;b&gt;" in got
+    await tg.key(U1, T.BTN_CONTACT); await tg.photo(U1, "qəbz")
+    assert tg.s.out[-2][3] == "photo" and tg.s.out[-2][0] == ADMIN and "qəbz" in tg.s.out[-2][1]
+    assert (await tg.photo(U1)).startswith(T.UNKNOWN_INPUT)          # a photo outside the dialogue is ignored
+    # admin answers with the inline button under the report
+    assert await tg.click(ADMIN, f"a:msg:{U1}") == T.ADMIN_MSG_ASK
+    await tg.text(ADMIN, "Qəbul olundu")
+    assert tg.last(U1) == T.FROM_ADMIN + "Qəbul olundu" and "Göndərildi" in tg.last(ADMIN)
+    # note on the user card
+    await tg.click(ADMIN, f"a:nt:{U1}")
+    assert "Qeyd: kartla ödəyib 14.11" in await tg.text(ADMIN, "kartla ödəyib 14.11")
+    assert (await db.get_user(U1))["note"] == "kartla ödəyib 14.11"
+    await tg.click(ADMIN, f"a:nt:{U1}"); await tg.text(ADMIN, "-")
+    assert (await db.get_user(U1))["note"] is None
+    # broadcast: draft -> confirmation -> every ACTIVE user, nobody else
+    await db.set_status(U2, "suspended")
+    await tg.click(ADMIN, "a:us:0"); await tg.click(ADMIN, "a:home"); await tg.click(ADMIN, "a:bc")
+    n = len(tg.s.out)
+    assert "1</b> aktiv istifadəçiyə" in await tg.text(ADMIN, "Sabah texniki fasilə olacaq")
+    assert all(o[0] == ADMIN for o in tg.s.out[n:])                  # nothing sent before confirming
+    await tg.click(ADMIN, "a:bcy")
+    for t in list(tg.env.ctx.tasks):
+        await t
+    assert tg.last(U1) == T.BROADCAST_HEAD + "Sabah texniki fasilə olacaq" and "Sabah" not in tg.last(U2)
+    assert "Göndərildi: <b>1</b>" in tg.last(ADMIN)
+    await tg.press(ADMIN, "a:bcy")                                   # pressing again sends nothing
+    assert not tg.env.ctx.tasks
+    for forbidden in (f"a:msg:{U1}", f"a:nt:{U1}", "a:bc", "a:bcy"):
+        await tg.press(U2, forbidden); assert tg.s.alerts == [T.NO_ACCESS]
+    actions = [r["action"] for r in await db.recent_audit(20)]
+    assert {"message_user", "note", "broadcast"} <= set(actions)
+    # usage statistics on the admin screen
+    await tg.click(ADMIN, "a:stats")
+    stats = tg.last(ADMIN)
+    assert "Bu gün aktiv: 3" in stats and "Adminə mesaj: 2" in stats and "Əlaqə: 2" in stats
+
+
+async def test_old_database_is_migrated(tmp_path):
+    import sqlite3
+    from app.db import Database
+    p = str(tmp_path / "old.sqlite3")
+    d = await Database(p).open(); await d.upsert_user(5, "u", "U"); await d.close()
+    con = sqlite3.connect(p); con.execute("ALTER TABLE users DROP COLUMN note"); con.commit(); con.close()
+    d = await Database(p).open()
+    assert (await d.get_user(5))["note"] is None and (await d.get_user(5))["username"] == "u"
+    await d.close()

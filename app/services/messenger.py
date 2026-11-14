@@ -36,6 +36,20 @@ class Messenger:
             log.exception("message to %s failed", user_id)
         return False
 
+    async def deliver(self, user_id: int, kind: str, payload: str, head: str = "", kb=None) -> bool:
+        """A relayed message: kind 'text' (payload = text) or 'photo' (payload = file_id|caption)."""
+        if kind != "photo":
+            return await self.user(user_id, head + payload, kb)
+        file_id, _, caption = payload.partition("|")
+        try:
+            await self.bot.send_photo(user_id, file_id, caption=(head + caption)[:1024], reply_markup=kb)
+            return True
+        except TelegramForbiddenError:
+            await self.db.set_user(user_id, blocked_bot=1)
+        except Exception:
+            log.exception("photo to %s failed", user_id)
+        return False
+
     async def admins(self, text: str, kb=None):
         for aid in self.cfg.admin_ids:
             await self.user(aid, text, kb)

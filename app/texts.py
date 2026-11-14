@@ -12,6 +12,7 @@ esc = html.escape
 BTN_HOME, BTN_BACK = "🏠 Ana səhifə", "⬅️ Geri"
 BTN_STATUS, BTN_LINKS, BTN_SUBS, BTN_HELP = "📊 Statusum", "🔗 Linklərim", "💎 Abunəlik", "ℹ️ Kömək"
 BTN_ADMIN = "🛠 Admin panel"
+BTN_CONTACT = "✉️ Əlaqə"
 BTN_ADD_LINK, BTN_EDIT, BTN_DELETE = "➕ Link əlavə et", "✏️ Dəyiş", "🗑 Sil"
 BTN_YES, BTN_NO, BTN_CANCEL = "✅ Bəli", "❌ Xeyr", "❌ Ləğv et"
 BTN_SEND_REQUEST = "✅ Sorğunu göndər"
@@ -75,13 +76,34 @@ def welcome(first_name, active: bool) -> str:
 
 def main_menu(u) -> str:
     return (f"🏠 <b>Ana səhifə</b>\n\nStatus: {STATUS.get(u['status'], u['status'])}\n"
-            f"Plan: {plan_title(u['plan'])}\n\nMenyu aşağıda, klaviatura sahəsindədir 👇")
+            f"Plan: {plan_title(u['plan'])}\n\nBölməni aşağıdakı düymələrdən seçin 👇")
+
+
+CONTACT_ASK = ("✉️ <b>Əlaqə</b>\n\nSualınızı, probleminizi və ya ödəniş qəbzini bir mesajda göndərin — "
+               "adminə çatdıracam. <b>Şəkil də göndərə bilərsiniz.</b>")
+CONTACT_SENT = "✅ Mesajınız adminə göndərildi."
+ADMIN_MSG_ASK = "Bu istifadəçiyə göndəriləcək mesajı yazın (mətn və ya şəkil):"
+BROADCAST_ASK = "📢 <b>Hamıya mesaj</b>\nAktiv istifadəçi sayı: <b>{n}</b>\n\nGöndəriləcək mesajı yazın (mətn və ya şəkil):"
+BROADCAST_CONFIRM = "Bu mesaj <b>{n}</b> aktiv istifadəçiyə göndərilsin?\n\n{preview}"
+NOTE_ASK = "Bu istifadəçi haqqında qeydi yazın (silmək üçün <code>-</code> göndərin):"
+FROM_ADMIN = "✉️ <b>Admindən mesaj</b>\n\n"
+BROADCAST_HEAD = "📢 <b>Admindən elan</b>\n\n"
+ACTION_NAMES = {"/start": "Start", "m:home": "Ana səhifə", "m:status": "Statusum", "m:links": "Linklərim",
+                "m:subs": "Abunəlik", "m:help": "Kömək", "m:contact": "Əlaqə", "l:add": "Link əlavə et",
+                "l:v": "Linkə baxış", "l:e": "Link dəyiş", "l:d": "Link sil", "s:p": "Plan seçimi",
+                "s:c": "Abunəlik sorğusu", "contact": "Adminə mesaj", "link_added": "Link əlavə olundu"}
+
+
+def contact_header(u) -> str:
+    return (f"📩 <b>Yeni müraciət</b>\nKimdən: {user_line(u)}\n"
+            f"Plan: {plan_title(u['plan'])} · Status: {STATUS.get(u['status'], u['status'])}\n\n")
 
 
 HELP = ("ℹ️ <b>Kömək</b>\n\n"
         "• <b>Statusum</b> — abunəlik vəziyyətiniz, bitmə tarixi və saatlıq limit.\n"
         "• <b>Linklərim</b> — izlənən Bina.az axtarış linkləri (əlavə et / dəyiş / sil).\n"
-        "• <b>Abunəlik</b> — plan seçimi və aktivləşdirmə sorğusu.\n\n"
+        "• <b>Abunəlik</b> — plan seçimi və aktivləşdirmə sorğusu.\n"
+        "• <b>Əlaqə</b> — adminə mesaj və ya ödəniş qəbzi göndərmək.\n\n"
         "Bot yalnız link əlavə edildikdən <b>sonra</b> çıxan yeni elanları göndərir. "
         "Saatlıq limiti keçən elanlar itmir — növbəyə düşür və limit açıldıqca göndərilir.\n\n"
         + plans_table())
@@ -227,7 +249,8 @@ def admin_user_card(u, n_links, sent_hour, queued, tz) -> str:
             f"Qeydiyyat: {fmt_dt(u['registered_at'], tz)}\n"
             f"Aktivləşmə: {fmt_dt(u['activated_at'], tz)}\nBitmə: {fmt_dt(u['expires_at'], tz)}\n"
             f"Linklər: {n_links}\nSon 1 saatda göndərilən: {sent_hour}\nNövbədə: {queued}"
-            + ("\n🚫 İstifadəçi botu bloklayıb" if u["blocked_bot"] else ""))
+            + ("\n🚫 İstifadəçi botu bloklayıb" if u["blocked_bot"] else "")
+            + (f"\n📝 Qeyd: {esc(u['note'])}" if u["note"] else ""))
 
 
 ASK_DATE = "Bitmə tarixini yazın (format: <code>GG.AA.İİİİ</code>, məs. <code>31.12.2026</code>):"

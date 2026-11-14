@@ -1,17 +1,32 @@
-"""Shared bot plumbing: context object, keyboards, screen rendering, registration."""
+"""Shared bot plumbing: context, screens, the keyboard-area menu, registration.
+
+Screens are declared once as (text, buttons) with `kb(...)`. `show()` puts those
+buttons into the phone's KEYBOARD AREA (reply keyboard), replacing the previous
+screen's buttons, and remembers "label -> action" for that user in the database.
+When the user taps a key, Telegram sends its label as text; `nav_router` looks the
+label up and runs the action exactly like an inline button press.
+
+Inline buttons are still used on messages the bot sends on its own (e.g. the
+admin's Approve / Reject under a subscription request).
+"""
 from __future__ import annotations
 
 import contextvars
+import json
+import re
 from dataclasses import dataclass, field
 
-from aiogram import BaseMiddleware
+from aiogram import BaseMiddleware, Router
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import BaseFilter, Command
 from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
-                           LinkPreviewOptions, Message, ReplyKeyboardMarkup, Update)
+                           LinkPreviewOptions, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update)
 
 from .. import texts as T
 
 NO_PREVIEW = LinkPreviewOptions(is_disabled=True)
+KB_PRESS = "kb"             # id of a synthetic callback made from a keyboard-area key
+_current: contextvars.ContextVar = contextvars.ContextVar("ctx", default=None)
 
 
 @dataclass
@@ -26,35 +41,51 @@ class Ctx:
 
 
 def kb(*rows) -> InlineKeyboardMarkup:
-    """kb([(text, data), ...], ...) - empty rows are skipped."""
+    """kb([(text, action), ...], ...) - empty rows are skipped."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t, callback_data=d) for t, d in row] for row in rows if row])
 
 
 def nav(back: str | None = None) -> list:
-    """The navigation row: Back -> previous logical menu, Home -> main menu."""
+    """Navigation row. Shown only where it is useful: 'Geri' leads to the parent
+    screen; 'Ana səhifə' is added only when Geri does not already lead home."""
     return ([(T.BTN_BACK, back)] if back else []) + [(T.BTN_HOME, "m:home")]
 
 
-KB_PRESS = "kb"             # id of a synthetic callback made from a keyboard-area button
-_current: contextvars.ContextVar = contextvars.ContextVar("ctx", default=None)
+def home_markup(is_admin: bool) -> InlineKeyboardMarkup:
+    return kb([(T.BTN_STATUS, "m:status"), (T.BTN_LINKS, "m:links")],
+              [(T.BTN_SUBS, "m:subs"), (T.BTN_CONTACT, "m:contact")],
+              [(T.BTN_HELP, "m:help")] + ([(T.BTN_ADMIN, "a:home")] if is_admin else []))
 
 
-def main_kb(is_admin: bool) -> ReplyKeyboardMarkup:
-    """The permanent menu in the phone's keyboard area."""
-    rows = [[T.BTN_STATUS, T.BTN_LINKS], [T.BTN_SUBS, T.BTN_HELP], [T.BTN_BACK, T.BTN_HOME]]
-    if is_admin:
-        rows.append([T.BTN_ADMIN])
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=t) for t in r] for r in rows],
-                               resize_keyboard=True, is_persistent=True)
+async def show(event, text: str, markup: InlineKeyboardMarkup | None = None):
+    """Send a screen as a new message; its buttons replace the keyboard-area menu."""
+    ctx, uid = _current.get(), event.from_user.id
+    mapping, rows = {}, []
+    for row in (markup.inline_keyboard if markup else []):
+        keys = []
+        for b in row:
+            if b.text in mapping or (b.text == T.BTN_HOME and mapping.get(T.BTN_BACK) == "m:home"):
+                continue                                 # 'Geri' already leads home
+            mapping[b.text] = b.callback_data
+            keys.append(KeyboardButton(text=b.text))
+        if keys:
+            rows.append(keys)
+    await ctx.db.kv_set(f"kbmap:{uid}", json.dumps(mapping, ensure_ascii=False))
+    reply = (ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
+             if rows else ReplyKeyboardRemove())
+    await ctx.msg.bot.send_message(uid, text, reply_markup=reply, link_preview_options=NO_PREVIEW)
+    if isinstance(event, CallbackQuery):
+        await ack(event)
 
 
-KEYBOARD_ACTIONS = {T.BTN_STATUS: "m:status", T.BTN_LINKS: "m:links", T.BTN_SUBS: "m:subs",
-                    T.BTN_HELP: "m:help", T.BTN_HOME: "m:home", T.BTN_ADMIN: "a:home", T.BTN_BACK: None}
+async def show_home(event, ctx, user, note: str = ""):
+    uid = user["user_id"]
+    await show(event, (note + "\n\n" if note else "") + T.main_menu(user), home_markup(ctx.cfg.is_admin(uid)))
 
 
 async def press(dispatcher, bot, from_user, data: str):
-    """Run the screen behind `data` exactly as if its inline button had been pressed."""
+    """Run the action `data` exactly as if an inline button carrying it had been pressed."""
     await dispatcher.feed_update(bot, Update(update_id=0, callback_query=CallbackQuery(
         id=KB_PRESS, from_user=from_user, chat_instance=KB_PRESS, data=data)))
 
@@ -72,52 +103,15 @@ async def ack(c: CallbackQuery, text: str | None = None, alert: bool = False):
         pass
 
 
-async def _remember_back(uid: int, markup):
-    """Store where 'Geri' leads from the screen just shown (its inline Back button)."""
-    ctx = _current.get()
-    if not ctx:
-        return
-    target = "m:home"
-    for row in getattr(markup, "inline_keyboard", None) or []:
-        for b in row:
-            if b.text == T.BTN_BACK and b.callback_data:
-                target = b.callback_data
-    await ctx.db.kv_set(f"back:{uid}", target)
-
-
-async def show(event, text: str, markup=None):
-    """Render a screen. Inline button -> edit that message in place. Keyboard-area button
-    or typed text -> a new message at the bottom of the chat."""
-    await _remember_back(event.from_user.id, markup)
-    if isinstance(event, CallbackQuery):
-        if event.message is None:                              # keyboard-area press
-            ctx = _current.get()
-            await ctx.msg.bot.send_message(event.from_user.id, text, reply_markup=markup,
-                                           link_preview_options=NO_PREVIEW)
-            return
-        try:
-            await event.message.edit_text(text, reply_markup=markup, link_preview_options=NO_PREVIEW)
-        except TelegramBadRequest as e:
-            if "not modified" not in str(e).lower():       # e.g. message too old to edit
-                await event.message.answer(text, reply_markup=markup, link_preview_options=NO_PREVIEW)
-        await ack(event)
-    else:
-        await event.answer(text, reply_markup=markup, link_preview_options=NO_PREVIEW)
-
-
-async def show_home(event, ctx, user):
-    """Main menu: always a NEW message, because it carries the keyboard-area menu."""
-    uid = user["user_id"]
-    await ctx.db.kv_set(f"back:{uid}", "m:home")
-    await ctx.msg.bot.send_message(uid, T.main_menu(user), reply_markup=main_kb(ctx.cfg.is_admin(uid)))
-    if isinstance(event, CallbackQuery):
-        await ack(event)
+def action_name(data: str) -> str:
+    """'l:v:15' -> 'l:v' : the action without its ids, for usage statistics."""
+    return ":".join(p for p in (data or "").split(":")[:2] if not re.fullmatch(r"-?\d+", p))
 
 
 class RegisterMiddleware(BaseMiddleware):
     """Every update: make sure the sender exists in the database (ID, username, first
-    name, registration date), hand the row to the handler, and drop any half-finished
-    text dialogue when a button is pressed."""
+    name, registration date), hand the row to the handler, count the action, and drop
+    any half-finished text dialogue when a button is pressed."""
 
     async def __call__(self, handler, event, data):
         user = data.get("event_from_user")
@@ -131,8 +125,40 @@ class RegisterMiddleware(BaseMiddleware):
                 return None
         _current.set(ctx)
         row, created = await ctx.db.upsert_user(user.id, user.username, user.first_name)
-        if isinstance(event, CallbackQuery) and row["state"]:
-            await ctx.db.set_state(user.id, None)
-            row = await ctx.db.get_user(user.id)
+        if isinstance(event, CallbackQuery):
+            await ctx.db.track(user.id, action_name(event.data))
+            if row["state"]:
+                await ctx.db.set_state(user.id, None)
+                row = await ctx.db.get_user(user.id)
         data["user"], data["created"] = row, created
         return await handler(event, data)
+
+
+class KeyboardKey(BaseFilter):
+    """True when the text is a key of the menu currently shown to this user."""
+
+    async def __call__(self, m: Message, ctx: Ctx):
+        if not m.text or not m.from_user:
+            return False
+        mapping = json.loads(await ctx.db.kv_get(f"kbmap:{m.from_user.id}", "{}") or "{}")
+        return {"target": mapping[m.text]} if m.text in mapping else False
+
+
+nav_router = Router(name="nav")
+
+
+@nav_router.message(KeyboardKey())
+async def keyboard_key(m: Message, ctx: Ctx, user, dispatcher, bot, target: str):
+    uid = user["user_id"]
+    await ctx.db.set_state(uid, None)            # a menu key abandons any pending dialogue
+    await ctx.db.kv_set(f"buf:{uid}", "")
+    await press(dispatcher, bot, m.from_user, target)
+
+
+@nav_router.message(Command("cancel"))
+async def cancel(m: Message, ctx: Ctx, user):
+    """Leave any pending dialogue (user or admin) and return to the main menu."""
+    uid = user["user_id"]
+    await ctx.db.set_state(uid, None)
+    await ctx.db.kv_set(f"buf:{uid}", "")
+    await show_home(m, ctx, await ctx.db.get_user(uid), T.CANCELLED)

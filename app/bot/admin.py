@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import time
 from zoneinfo import ZoneInfo
 
@@ -14,7 +15,7 @@ from aiogram.types import CallbackQuery, Message
 
 from .. import texts as T
 from ..plans import ORDER, PLANS, ST_ACTIVE, ST_EXPIRED, ST_PENDING, ST_REJECTED, ST_SUSPENDED
-from .common import KEYBOARD_ACTIONS, Ctx, ack, kb, nav, show
+from .common import Ctx, ack, kb, nav, show
 
 PAGE = 8
 DURATIONS = [(30, "30 gün"), (90, "90 gün"), (180, "180 gün"), (365, "365 gün")]
@@ -27,7 +28,7 @@ class IsAdmin(BaseFilter):
 
 class AdminState(BaseFilter):
     async def __call__(self, event, user) -> bool:
-        return (user["state"] or "").startswith("adm_") and getattr(event, "text", None) not in KEYBOARD_ACTIONS
+        return (user["state"] or "").startswith("adm_")
 
 
 router = Router(name="admin")
@@ -52,7 +53,8 @@ async def _panel(event, ctx: Ctx):
             f"Növbədə elan: {await ctx.db.count_queued()}")
     await show(event, text, kb([(f"⏳ Sorğular ({pend})", "a:pend"), ("👥 İstifadəçilər", "a:us:0")],
                                [("📈 Statistika", "a:stats"), ("🩺 Sistem vəziyyəti", "a:health")],
-                               [("▶️ Monitorinqi indi başlat", "a:run"), ("📜 Audit", "a:audit")], nav()))
+                               [("▶️ Monitorinqi başlat", "a:run"), ("📜 Audit", "a:audit")],
+                               [("📢 Hamıya mesaj", "a:bc")], nav("m:home")))
 
 
 @router.message(Command("admin"))
@@ -69,8 +71,8 @@ async def admin_home(c: CallbackQuery, ctx: Ctx):
 @router.callback_query(F.data == "a:pend")
 async def pending(c: CallbackQuery, ctx: Ctx):
     reqs = await ctx.db.pending_requests()
-    rows = [[(f"{u['first_name'] or u['user_id']} → {T.plan_title(u['requested_plan'])}", f"a:u:{u['user_id']}")]
-            for u in reqs[:30]]
+    rows = [[(f"{u['first_name'] or '—'} → {T.plan_title(u['requested_plan'])} · {u['user_id']}", f"a:u:{u['user_id']}")]
+            for u in reqs[:12]]
     await show(c, "⏳ <b>Gözləyən sorğular</b>" + ("" if reqs else "\n\nSorğu yoxdur."),
                kb(*rows, nav("a:home")))
 
@@ -102,6 +104,7 @@ async def _card(event, ctx: Ctx, uid: int, note: str = ""):
     if u["requested_plan"]:
         rows.append([(T.BTN_APPROVE, f"a:ap:{uid}"), (T.BTN_REJECT, f"a:rj:{uid}")])
     rows.append([("📦 Plan", f"a:pl:{uid}"), ("📅 Müddət", f"a:ex:{uid}")])
+    rows.append([("✉️ Mesaj yaz", f"a:msg:{uid}"), ("📝 Qeyd", f"a:nt:{uid}")])
     if u["status"] == ST_ACTIVE:
         rows.append([("⏸ Dayandır", f"a:su:{uid}"), ("🔗 Linklər", f"a:ul:{uid}")])
     elif u["status"] == ST_SUSPENDED:
@@ -217,10 +220,8 @@ async def expiry_days(c: CallbackQuery, ctx: Ctx):
     await _set_expiry(c, ctx, c.from_user.id, _uid(c), int(time.time()) + _uid(c, 3) * 86400)
 
 
-@router.message(AdminState(), F.text)
-async def date_input(m: Message, ctx: Ctx, user):
-    _, mode, uid = user["state"].split(":")
-    uid, ts = int(uid), None
+async def _date_input(m: Message, ctx: Ctx, user, mode: str, uid: int):
+    ts = None
     for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
         try:
             d = dt.datetime.strptime(m.text.strip(), fmt)
@@ -229,12 +230,99 @@ async def date_input(m: Message, ctx: Ctx, user):
         except ValueError:
             continue
     if ts is None or ts <= time.time():
-        return await m.answer(T.BAD_DATE, reply_markup=kb([(T.BTN_CANCEL, f"a:u:{uid}")]))
+        return await show(m, T.BAD_DATE, kb([(T.BTN_CANCEL, f"a:u:{uid}")]))
     await ctx.db.set_state(user["user_id"], None)
     if mode == "adc":
         await _approve(m, ctx, user["user_id"], uid, ts)
     else:
         await _set_expiry(m, ctx, user["user_id"], uid, ts)
+
+
+# ------------------------------------------------------------------ messages / notes / broadcast
+@router.callback_query(F.data.startswith("a:msg:"))
+async def message_ask(c: CallbackQuery, ctx: Ctx):
+    uid = _uid(c)
+    await ctx.db.set_state(c.from_user.id, f"adm_msg:{uid}")
+    await show(c, T.ADMIN_MSG_ASK, kb([(T.BTN_CANCEL, f"a:u:{uid}")]))
+
+
+@router.callback_query(F.data.startswith("a:nt:"))
+async def note_ask(c: CallbackQuery, ctx: Ctx):
+    uid = _uid(c)
+    await ctx.db.set_state(c.from_user.id, f"adm_note:{uid}")
+    await show(c, T.NOTE_ASK, kb([(T.BTN_CANCEL, f"a:u:{uid}")]))
+
+
+@router.callback_query(F.data == "a:bc")
+async def broadcast_ask(c: CallbackQuery, ctx: Ctx):
+    n = len(await ctx.db.active_user_ids())
+    if not n:
+        return await show(c, "Aktiv istifadəçi yoxdur.", kb(nav("a:home")))
+    await ctx.db.set_state(c.from_user.id, "adm_bc")
+    await show(c, T.BROADCAST_ASK.format(n=n), kb([(T.BTN_CANCEL, "a:home")]))
+
+
+@router.callback_query(F.data == "a:bcy")
+async def broadcast_go(c: CallbackQuery, ctx: Ctx):
+    admin_id = c.from_user.id
+    raw = await ctx.db.kv_get(f"bc:{admin_id}", "")
+    if not raw:
+        return await _panel(c, ctx)
+    await ctx.db.kv_set(f"bc:{admin_id}", "")
+    draft, targets = json.loads(raw), await ctx.db.active_user_ids()
+    await _audit(ctx, c, "broadcast", None, f"{draft['kind']} -> {len(targets)} users")
+
+    async def job():
+        sent = 0
+        for uid in targets:
+            sent += await ctx.msg.deliver(uid, draft["kind"], draft["payload"], T.BROADCAST_HEAD)
+            await asyncio.sleep(0.05)                 # stay under Telegram's rate limits
+        await ctx.msg.user(admin_id, f"📢 Göndərildi: <b>{sent}</b>"
+                           + (f" · çatdırılmadı: <b>{len(targets) - sent}</b>" if sent < len(targets) else ""))
+    t = asyncio.create_task(job())
+    ctx.tasks.add(t)
+    t.add_done_callback(ctx.tasks.discard)
+    await _panel(c, ctx)
+
+
+async def _relay(m: Message, ctx: Ctx, user, kind: str, payload: str):
+    """Text or photo typed by an admin while a message / broadcast dialogue is open."""
+    admin_id, state = user["user_id"], user["state"]
+    if state == "adm_bc":
+        await ctx.db.kv_set(f"bc:{admin_id}", json.dumps({"kind": kind, "payload": payload}))
+        await ctx.db.set_state(admin_id, None)
+        preview = "🖼 Şəkil" + (f": {payload.partition('|')[2][:300]}" if payload.partition("|")[2] else "") \
+            if kind == "photo" else payload[:600]
+        n = len(await ctx.db.active_user_ids())
+        return await show(m, T.BROADCAST_CONFIRM.format(n=n, preview=preview),
+                          kb([("✅ Bəli, göndər", "a:bcy"), (T.BTN_NO, "a:home")]))
+    uid = int(state.split(":")[1])
+    await ctx.db.set_state(admin_id, None)
+    ok = await ctx.msg.deliver(uid, kind, payload, T.FROM_ADMIN)
+    await ctx.db.add_audit(admin_id, "message_user", uid, kind)
+    await _card(m, ctx, uid, "✅ Göndərildi." if ok else "⚠️ Çatdırılmadı (istifadəçi botu bloklamış ola bilər).")
+
+
+@router.message(AdminState(), F.photo)
+async def admin_photo(m: Message, ctx: Ctx, user):
+    if user["state"].startswith(("adm_msg:", "adm_bc")):
+        return await _relay(m, ctx, user, "photo", f"{m.photo[-1].file_id}|{T.esc(m.caption or '')}")
+    await show(m, "Burada şəkil qəbul olunmur — mətn göndərin.", kb([(T.BTN_CANCEL, "a:home")]))
+
+
+@router.message(AdminState(), F.text)
+async def admin_text(m: Message, ctx: Ctx, user):
+    parts = user["state"].split(":")
+    if parts[0] == "adm_date":
+        return await _date_input(m, ctx, user, parts[1], int(parts[2]))
+    if parts[0] == "adm_note":
+        uid = int(parts[1])
+        note = None if m.text.strip() == "-" else m.text.strip()[:300]
+        await ctx.db.set_user(uid, note=note)
+        await ctx.db.set_state(user["user_id"], None)
+        await ctx.db.add_audit(user["user_id"], "note", uid, note or "(silindi)")
+        return await _card(m, ctx, uid, "📝 Qeyd yadda saxlandı.")
+    await _relay(m, ctx, user, "text", T.esc(m.text))
 
 
 @router.callback_query(F.data.startswith("a:su:"))
@@ -312,6 +400,12 @@ async def stats(c: CallbackQuery, ctx: Ctx):
               f"Uğursuz: {d1.get('failed', 0)}")
     if top:
         text += "\n\n<b>Ən çox alanlar (24 s)</b>\n" + "\n".join(f"<code>{r['user_id']}</code>: {r['n']}" for r in top)
+    us = await ctx.db.usage_summary()
+    text += (f"\n\n<b>İstifadə (son 7 gün)</b>\nBu gün aktiv: {us['active_today']} | 7 gündə aktiv: {us['active_period']}")
+    if us["actions"]:
+        text += "\n" + "\n".join(f"• {T.esc(T.ACTION_NAMES.get(r['action'], r['action']))}: {r['n']}" for r in us["actions"])
+    if us["users"]:
+        text += "\n<b>Ən aktiv istifadəçilər</b>\n" + "\n".join(f"<code>{r['user_id']}</code>: {r['n']}" for r in us["users"])
     await show(c, text, kb([("🔄 Yenilə", "a:stats")], nav("a:home")))
 
 
