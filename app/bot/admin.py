@@ -154,7 +154,7 @@ async def approve_days(c: CallbackQuery, ctx: Ctx):
 async def ask_date(c: CallbackQuery, ctx: Ctx):
     mode, uid = c.data.split(":")[1], _uid(c)
     await ctx.db.set_state(c.from_user.id, f"adm_date:{mode}:{uid}")
-    await show(c, T.ASK_DATE, kb([(T.BTN_CANCEL, f"a:u:{uid}")], nav("a:home")))
+    await show(c, T.ASK_DATE, kb([(T.BTN_CANCEL, f"a:u:{uid}")], nav(f"a:u:{uid}")))
 
 
 @router.callback_query(F.data.startswith("a:rj:"))
