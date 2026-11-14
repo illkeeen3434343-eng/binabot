@@ -1,0 +1,9 @@
+.env
+data/*
+logs/*
+!data/.gitkeep
+!logs/.gitkeep
+backups/
+.venv/
+__pycache__/
+.pytest_cache/

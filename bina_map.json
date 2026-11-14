@@ -1,0 +1,11 @@
+{
+  "_comment": "URL -> Bina.az GraphQL filter. Extend here without touching code. Verify every new entry with: python -m app.tools.probe <url>",
+  "cities": {"baki": "1"},
+  "deals": {"alqi-satqi": false, "kiraye": true},
+  "categories": {"menziller": "1"},
+  "list_params": {"room_ids[]": "roomIds", "location_ids[]": "locationIds"},
+  "number_params": {"price_from": "priceFrom", "price_to": "priceTo", "area_from": "areaFrom", "area_to": "areaTo"},
+  "bool_params": {"has_bill_of_sale": "hasBillOfSale", "has_mortgage": "hasMortgage", "floor_first": "floorFirst", "floor_last": "floorLast"},
+  "client_bool_params": {"has_repair": "has_repair"},
+  "ignored_params": ["page", "sort", "sorting", "items_view", "cursor"]
+}

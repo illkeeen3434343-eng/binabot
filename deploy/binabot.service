@@ -1,0 +1,16 @@
+# sudo cp deploy/binabot.service /etc/systemd/system/ && sudo systemctl daemon-reload
+# sudo systemctl enable --now binabot      |  logs: journalctl -u binabot -f
+[Unit]
+Description=Bina.az subscription monitor bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=vboxuser
+WorkingDirectory=/home/vboxuser/binabot
+ExecStart=/home/vboxuser/binabot/.venv/bin/python run.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
