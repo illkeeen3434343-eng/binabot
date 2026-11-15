@@ -93,19 +93,19 @@ def parse_link(raw: str, lmap: LinkMap, unknown: str = "reject") -> ParsedLink:
         f["cityId"] = lmap.cities[segs[0]]
         path.append(segs.pop(0))
     if not segs or segs[0] not in lmap.deals:
-        raise LinkError("unsupported", "path is not a known search section")
+        raise LinkError("unsupported", "bu bölmə axtarış bölməsi kimi tanınmır")
     f["leased"] = bool(lmap.deals[segs[0]])
     path.append(segs.pop(0))
     if segs:
         if segs[0] not in lmap.categories:
-            raise LinkError("unsupported", f"category {segs[0]!r}")
+            raise LinkError("unsupported", f"kateqoriya dəstəklənmir: {segs[0]}")
         f["categoryId"] = lmap.categories[segs[0]]
         path.append(segs.pop(0))
         if segs and f"{path[-1]}/{segs[0]}" in lmap.subcategories:
             f["categoryId"] = lmap.subcategories[f"{path[-1]}/{segs[0]}"]
             path.append(segs.pop(0))
     if segs:
-        raise LinkError("unsupported", f"extra path {'/'.join(segs)!r}")
+        raise LinkError("unsupported", f"linkin bu hissəsi tanınmır: {'/'.join(segs)}")
 
     canon: list[tuple[str, str]] = []
     client: dict = {}
@@ -115,18 +115,18 @@ def parse_link(raw: str, lmap: LinkMap, unknown: str = "reject") -> ParsedLink:
         k = k.strip()
         if k in lmap.list_params:
             if not re.fullmatch(r"\d{1,9}", v.strip()):
-                raise LinkError("unsupported", f"{k}={v}")
+                raise LinkError("unsupported", f"yanlış dəyər: {k}={v}")
             lists.setdefault(k, set()).add(v.strip())
         elif k in lmap.number_params:
             n = _num(v)
             if n is None:
-                raise LinkError("unsupported", f"{k}={v}")
+                raise LinkError("unsupported", f"yanlış dəyər: {k}={v}")
             f[lmap.number_params[k]] = n
             canon.append((k, str(n)))
         elif k in lmap.bool_params or k in lmap.client_bool_params:
             b = _bool(v)
             if b is None:
-                raise LinkError("unsupported", f"{k}={v}")
+                raise LinkError("unsupported", f"yanlış dəyər: {k}={v}")
             if k in lmap.bool_params:
                 f[lmap.bool_params[k]] = b
             else:
@@ -137,7 +137,7 @@ def parse_link(raw: str, lmap: LinkMap, unknown: str = "reject") -> ParsedLink:
         elif unknown == "ignore":
             ignored.append(k)
         else:
-            raise LinkError("unsupported", f"filter {k!r}")
+            raise LinkError("unsupported", f"filtr dəstəklənmir: {k}")
     for k, vals in lists.items():
         ordered = sorted(vals, key=int)
         f[lmap.list_params[k]] = ordered

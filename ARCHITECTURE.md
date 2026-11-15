@@ -107,7 +107,11 @@ approve (choose 30/90/180/365 days or type a date) / reject; users list → user
 → plan, expiry, suspend / reactivate, links (view / remove); statistics; system
 health (last cycle, cool-down, recent errors); audit log; run a cycle now; message
 one user (text / photo), note on a user, broadcast to all active users (with
-confirmation), usage statistics (active users, most used actions).
+confirmation; all active users or one plan), usage statistics, and **plan limits**
+(ads per hour and link count of Basic / Pro / Platinum, stored in the DB, effective
+immediately). The users page lists details as text (name, @username, ID, status, plan,
+phone, links, dates) with one inline button per user. A user's phone is stored only
+when they share their own number with Telegram's contact button.
 
 **Ad lifecycle.** detected → `queued` for every entitled link owner → `sent` when
 the user's rolling window has room → otherwise waits; `expired` after
@@ -144,7 +148,7 @@ binabot/
 │   │   ├── user.py         user menus
 │   │   └── admin.py        admin panel
 │   └── tools/probe.py      one-request check of a link against Bina.az
-├── tests/                  67 automated tests + smoke_process.py
+├── tests/                  69 automated tests + smoke_process.py
 └── deploy/                 systemd unit, backup script
 ```
 

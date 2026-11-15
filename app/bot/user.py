@@ -87,7 +87,7 @@ async def subs_send(c: CallbackQuery, ctx: Ctx, user):
 # ------------------------------------------------------------------ links
 async def _links_screen(event, ctx: Ctx, user, note: str = ""):
     links = await ctx.db.user_links(user["user_id"])
-    rows = [[(f"{i}. {T.short_url(l['url'])}", f"l:v:{l['id']}")] for i, l in enumerate(links, 1)]
+    rows = [[(f"🔗 Link {i}", f"l:v:{l['id']}")] for i, l in enumerate(links, 1)]
     text = (note + "\n\n" if note else "") + T.links_screen(links, _max_links(user))
     await show(event, text, kb(*rows, [(T.BTN_ADD_LINK, "l:add")], nav("m:home")))
 
@@ -182,6 +182,18 @@ async def _contact_send(m: Message, ctx: Ctx, user, kind: str, payload: str):
     await ctx.db.set_state(uid, None)
     await ctx.db.track(uid, "contact")
     await show_home(m, ctx, user, T.CONTACT_SENT)
+
+
+@router.message(F.contact)
+async def phone_shared(m: Message, ctx: Ctx, user):
+    """Telegram's own 'share my number' button; a forwarded/other person's contact is refused."""
+    uid = user["user_id"]
+    if m.contact.user_id != uid:
+        return await show_home(m, ctx, user, T.PHONE_NOT_OWN)
+    phone = "+" + "".join(ch for ch in m.contact.phone_number if ch.isdigit())
+    await ctx.db.set_user(uid, phone=phone)
+    await ctx.db.track(uid, "phone")
+    await show_home(m, ctx, await ctx.db.get_user(uid), T.PHONE_SAVED)
 
 
 @router.message(F.photo)

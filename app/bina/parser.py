@@ -103,16 +103,16 @@ def parse_node(node: dict) -> Ad:
 def parse_search_payload(payload) -> tuple[list[Ad], str | None, int | None]:
     """-> (ads on this page, cursor of the next page or None, total count or None)."""
     if not isinstance(payload, dict):
-        raise SchemaError("answer is not a JSON object")
+        raise SchemaError("cavab JSON obyekti deyil")
     if payload.get("errors"):
         msg = "; ".join(str(e.get("message", e)) if isinstance(e, dict) else str(e)
                         for e in payload["errors"])
         if "persistedquery" in msg.lower().replace("_", "").replace(" ", ""):
-            raise SchemaError("persisted query expired - update BINA_PERSISTED_HASH: " + msg[:150])
-        raise SchemaError("GraphQL error: " + msg[:200])
+            raise SchemaError("sorğu heşinin vaxtı bitib — .env faylında BINA_PERSISTED_HASH yenilənməlidir: " + msg[:150])
+        raise SchemaError("GraphQL xətası: " + msg[:200])
     conn = (payload.get("data") or {}).get("itemsConnection")
     if not isinstance(conn, dict) or not isinstance(conn.get("edges"), list):
-        raise SchemaError("no itemsConnection.edges in the answer")
+        raise SchemaError("cavabda itemsConnection.edges tapılmadı")
     ads = []
     for edge in conn["edges"]:
         node = edge.get("node") if isinstance(edge, dict) else None

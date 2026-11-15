@@ -122,7 +122,7 @@ async def test_network_errors_are_retried_a_bounded_number_of_times(env):
     await env.mkuser(10); await env.mklink(10)
     env.http.fail = TimeoutError()
     r = await env.mon.run_cycle()
-    assert len(env.http.calls) == 2 and r["note"].startswith("network")   # 1 try + 1 retry
+    assert len(env.http.calls) == 2 and r["note"].startswith("şəbəkə xətası")   # 1 try + 1 retry
     assert "qoşulmaq olmadı" in env.admin_msgs[0]
 
 
@@ -135,7 +135,7 @@ async def test_schema_change_is_reported_not_crashed(env):
         return Response(200, {}, b'{"errors":[{"message":"PersistedQueryNotFound"}]}')
     env.http.get = bad
     r = await env.mon.run_cycle()
-    assert r["note"] == "schema" and "BINA_PERSISTED_HASH" in env.admin_msgs[0]
+    assert r["note"] == "struktur" and "BINA_PERSISTED_HASH" in env.admin_msgs[0]
 
 
 async def test_history_survives_restart(env):

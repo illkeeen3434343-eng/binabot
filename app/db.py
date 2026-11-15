@@ -103,8 +103,9 @@ class Database:
         await self.c.execute("PRAGMA foreign_keys=ON")
         await self.c.executescript(SCHEMA)
         cols = {r[1] for r in await self._all("PRAGMA table_info(users)")}
-        if "note" not in cols:                      # migration for databases created before notes
-            await self.c.execute("ALTER TABLE users ADD COLUMN note TEXT")
+        for col in ("note", "phone"):               # migration for databases created before these
+            if col not in cols:
+                await self.c.execute(f"ALTER TABLE users ADD COLUMN {col} TEXT")
         await self.c.commit()
         return self
 
@@ -427,9 +428,21 @@ class Database:
                                      "GROUP BY user_id ORDER BY n DESC LIMIT ?", (since, top)),
         }
 
-    async def active_user_ids(self):
-        rows = await self._all("SELECT user_id FROM users WHERE status=? AND blocked_bot=0", (ST_ACTIVE,))
-        return [r[0] for r in rows]
+    async def active_user_ids(self, plan=None):
+        """Active users who have not blocked the bot; optionally of one plan only."""
+        sql, args = "SELECT user_id FROM users WHERE status=? AND blocked_bot=0", [ST_ACTIVE]
+        if plan:
+            sql += " AND plan=?"
+            args.append(plan)
+        return [r[0] for r in await self._all(sql, args)]
+
+    async def link_counts(self, user_ids):
+        if not user_ids:
+            return {}
+        q = ",".join("?" * len(user_ids))
+        rows = await self._all(f"SELECT user_id, COUNT(*) FROM links WHERE user_id IN ({q}) GROUP BY user_id",
+                               tuple(user_ids))
+        return {r[0]: r[1] for r in rows}
 
     # ------------------------------------------------------------- housekeeping
     async def prune(self, keep_days=60):

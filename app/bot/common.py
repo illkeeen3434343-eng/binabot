@@ -12,6 +12,7 @@ admin's Approve / Reject under a subscription request).
 from __future__ import annotations
 
 import contextvars
+import html
 import json
 import re
 from dataclasses import dataclass, field
@@ -52,10 +53,32 @@ def nav(back: str | None = None) -> list:
     return ([(T.BTN_BACK, back)] if back else []) + [(T.BTN_HOME, "m:home")]
 
 
-def home_markup(is_admin: bool) -> InlineKeyboardMarkup:
+SHARE_PHONE = "contact:share"      # a key with this action asks Telegram for the user's own number
+
+
+def home_markup(is_admin: bool, has_phone: bool = True) -> InlineKeyboardMarkup:
     return kb([(T.BTN_STATUS, "m:status"), (T.BTN_LINKS, "m:links")],
               [(T.BTN_SUBS, "m:subs"), (T.BTN_CONTACT, "m:contact")],
-              [(T.BTN_HELP, "m:help")] + ([(T.BTN_ADMIN, "a:home")] if is_admin else []))
+              [(T.BTN_HELP, "m:help")] + ([(T.BTN_ADMIN, "a:home")] if is_admin else []),
+              [] if has_phone else [(T.BTN_PHONE, SHARE_PHONE)])
+
+
+def _plain(text: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+
+async def send(bot, uid: int, text: str, markup=None):
+    """Send HTML text; if Telegram refuses the formatting, send it as plain text."""
+    try:
+        return await bot.send_message(uid, text, reply_markup=markup, link_preview_options=NO_PREVIEW)
+    except TelegramBadRequest:
+        return await bot.send_message(uid, _plain(text)[:4096], reply_markup=markup, parse_mode=None,
+                                      link_preview_options=NO_PREVIEW)
+
+
+async def show_inline(event, text: str, markup: InlineKeyboardMarkup):
+    """An extra message whose buttons stay UNDER it (lists of items to open)."""
+    await send(_current.get().msg.bot, event.from_user.id, text, markup)
 
 
 async def show(event, text: str, markup: InlineKeyboardMarkup | None = None):
@@ -67,6 +90,9 @@ async def show(event, text: str, markup: InlineKeyboardMarkup | None = None):
         for b in row:
             if b.text in mapping or (b.text == T.BTN_HOME and mapping.get(T.BTN_BACK) == "m:home"):
                 continue                                 # 'Geri' already leads home
+            if b.callback_data == SHARE_PHONE:           # Telegram sends the contact, not a text
+                keys.append(KeyboardButton(text=b.text, request_contact=True))
+                continue
             mapping[b.text] = b.callback_data
             keys.append(KeyboardButton(text=b.text))
         if keys:
@@ -74,14 +100,15 @@ async def show(event, text: str, markup: InlineKeyboardMarkup | None = None):
     await ctx.db.kv_set(f"kbmap:{uid}", json.dumps(mapping, ensure_ascii=False))
     reply = (ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True, is_persistent=True)
              if rows else ReplyKeyboardRemove())
-    await ctx.msg.bot.send_message(uid, text, reply_markup=reply, link_preview_options=NO_PREVIEW)
+    await send(ctx.msg.bot, uid, text, reply)
     if isinstance(event, CallbackQuery):
         await ack(event)
 
 
 async def show_home(event, ctx, user, note: str = ""):
     uid = user["user_id"]
-    await show(event, (note + "\n\n" if note else "") + T.main_menu(user), home_markup(ctx.cfg.is_admin(uid)))
+    await show(event, (note + "\n\n" if note else "") + T.main_menu(user),
+               home_markup(ctx.cfg.is_admin(uid), bool(user["phone"])))
 
 
 async def press(dispatcher, bot, from_user, data: str):

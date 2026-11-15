@@ -14,8 +14,8 @@ from aiogram.filters import BaseFilter, Command
 from aiogram.types import CallbackQuery, Message
 
 from .. import texts as T
-from ..plans import ORDER, PLANS, ST_ACTIVE, ST_EXPIRED, ST_PENDING, ST_REJECTED, ST_SUSPENDED
-from .common import Ctx, ack, kb, nav, show
+from ..plans import LIMIT_RANGE, ORDER, PLANS, set_limit, ST_ACTIVE, ST_EXPIRED, ST_PENDING, ST_REJECTED, ST_SUSPENDED
+from .common import Ctx, ack, kb, nav, show, show_inline
 
 PAGE = 8
 DURATIONS = [(30, "30 gün"), (90, "90 gün"), (180, "180 gün"), (365, "365 gün")]
@@ -48,13 +48,13 @@ async def _audit(ctx: Ctx, c, action, target=None, details=""):
 async def _panel(event, ctx: Ctx):
     sc = await ctx.db.status_counts()
     pend = len(await ctx.db.pending_requests())
-    text = (f"🛠 <b>Admin panel</b>\n\nİstifadəçilər: {sum(sc.values())}\n"
+    text = (f"🛠 <b>Admin paneli</b>\n\nİstifadəçilər: {sum(sc.values())}\n"
             f"Aktiv: {sc.get(ST_ACTIVE, 0)} | Gözləyən sorğu: {pend}\n"
             f"Növbədə elan: {await ctx.db.count_queued()}")
     await show(event, text, kb([(f"⏳ Sorğular ({pend})", "a:pend"), ("👥 İstifadəçilər", "a:us:0")],
                                [("📈 Statistika", "a:stats"), ("🩺 Sistem vəziyyəti", "a:health")],
-                               [("▶️ Monitorinqi başlat", "a:run"), ("📜 Audit", "a:audit")],
-                               [("📢 Hamıya mesaj", "a:bc")], nav("m:home")))
+                               [("▶️ Monitorinqi başlat", "a:run"), ("📜 Jurnal", "a:audit")],
+                               [("📢 Elan göndər", "a:bc"), ("⚙️ Plan limitləri", "a:lim")], nav("m:home")))
 
 
 @router.message(Command("admin"))
@@ -79,17 +79,19 @@ async def pending(c: CallbackQuery, ctx: Ctx):
 
 @router.callback_query(F.data.startswith("a:us:"))
 async def users(c: CallbackQuery, ctx: Ctx):
+    """Header + pager in the keyboard area, then the details as a message with one
+    inline button per user (pressing it opens the user's card as a new message)."""
     page = max(0, _uid(c))
     total = await ctx.db.count_users()
     us = await ctx.db.list_users(page * PAGE, PAGE)
-    icon = {"active": "✅", "pending": "⏳", "rejected": "❌", "suspended": "⏸", "expired": "⌛", "new": "▫️"}
-    rows = [[(f"{icon.get(u['status'], '')} {u['first_name'] or '—'} · {T.plan_title(u['plan'])} · {u['user_id']}",
-              f"a:u:{u['user_id']}")] for u in us]
-    pager = ([("◀️", f"a:us:{page - 1}")] if page else []) + \
-            ([("▶️", f"a:us:{page + 1}")] if (page + 1) * PAGE < total else [])
+    pager = ([("◀️ Əvvəlki", f"a:us:{page - 1}")] if page else []) + \
+            ([("Növbəti ▶️", f"a:us:{page + 1}")] if (page + 1) * PAGE < total else [])
     pages = max(1, -(-total // PAGE))
-    await show(c, f"👥 <b>İstifadəçilər</b> — cəmi {total} (səhifə {page + 1}/{pages})",
-               kb(*rows, pager, nav("a:home")))
+    await show(c, f"👥 <b>İstifadəçilər</b> — cəmi {total} (səhifə {page + 1}/{pages})", kb(pager, nav("a:home")))
+    counts = await ctx.db.link_counts([u["user_id"] for u in us])
+    buttons = [[(T.user_button(u), f"a:u:{u['user_id']}")] for u in us]
+    await show_inline(c, T.admin_users_list(us, counts, page * PAGE, ctx.cfg.timezone)
+                      + ("\n\nƏtraflı baxmaq və idarə etmək üçün istifadəçini seçin 👇" if us else ""), kb(*buttons))
 
 
 # ------------------------------------------------------------------ one user
@@ -132,7 +134,7 @@ async def _approve(event, ctx: Ctx, admin_id: int, uid: int, expires_at: int):
     plan = u["requested_plan"] or u["plan"] or "basic"
     await ctx.db.activate(uid, plan, expires_at)
     await ctx.db.add_audit(admin_id, "approve", uid,
-                           f"plan={plan} expires={T.fmt_dt(expires_at, ctx.cfg.timezone)}")
+                           f"plan: {T.plan_title(plan)}, bitmə: {T.fmt_dt(expires_at, ctx.cfg.timezone)}")
     await ctx.msg.user(uid, T.approved(plan, expires_at, ctx.cfg.timezone))
     await _card(event, ctx, uid, "✅ Təsdiqləndi.")
 
@@ -169,7 +171,7 @@ async def reject(c: CallbackQuery, ctx: Ctx):
     await ctx.db.set_user(uid, requested_plan=None, requested_at=None)
     if u["status"] == ST_PENDING:
         await ctx.db.set_status(uid, ST_REJECTED)
-    await _audit(ctx, c, "reject", uid, f"requested={u['requested_plan']}")
+    await _audit(ctx, c, "reject", uid, f"sorğu: {T.plan_title(u['requested_plan'])}")
     await ctx.msg.user(uid, T.REJECTED)
     await _card(c, ctx, uid, "❌ Rədd edildi.")
 
@@ -254,12 +256,24 @@ async def note_ask(c: CallbackQuery, ctx: Ctx):
 
 
 @router.callback_query(F.data == "a:bc")
+async def broadcast_menu(c: CallbackQuery, ctx: Ctx):
+    await show(c, T.BC_MENU, kb(*[[(f"📢 {T.BC_TARGETS[k]}", f"a:bct:{k}")] for k in ("all", *ORDER)], nav("a:home")))
+
+
+async def _bc_ids(ctx: Ctx, target: str):
+    return await ctx.db.active_user_ids(None if target == "all" else target)
+
+
+@router.callback_query(F.data.startswith("a:bct:"))
 async def broadcast_ask(c: CallbackQuery, ctx: Ctx):
-    n = len(await ctx.db.active_user_ids())
+    target = c.data.split(":")[2]
+    if target not in T.BC_TARGETS:
+        return await ack(c)
+    n = len(await _bc_ids(ctx, target))
     if not n:
-        return await show(c, "Aktiv istifadəçi yoxdur.", kb(nav("a:home")))
-    await ctx.db.set_state(c.from_user.id, "adm_bc")
-    await show(c, T.BROADCAST_ASK.format(n=n), kb([(T.BTN_CANCEL, "a:home")]))
+        return await show(c, T.BC_EMPTY, kb(nav("a:bc")))
+    await ctx.db.set_state(c.from_user.id, f"adm_bc:{target}")
+    await show(c, T.BROADCAST_ASK.format(target=T.BC_TARGETS[target], n=n), kb([(T.BTN_CANCEL, "a:bc")]))
 
 
 @router.callback_query(F.data == "a:bcy")
@@ -269,15 +283,16 @@ async def broadcast_go(c: CallbackQuery, ctx: Ctx):
     if not raw:
         return await _panel(c, ctx)
     await ctx.db.kv_set(f"bc:{admin_id}", "")
-    draft, targets = json.loads(raw), await ctx.db.active_user_ids()
-    await _audit(ctx, c, "broadcast", None, f"{draft['kind']} -> {len(targets)} users")
+    draft = json.loads(raw)
+    targets = await _bc_ids(ctx, draft["target"])
+    await _audit(ctx, c, "broadcast", None, f"{T.BC_TARGETS[draft['target']]}: {len(targets)}")
 
     async def job():
         sent = 0
         for uid in targets:
             sent += await ctx.msg.deliver(uid, draft["kind"], draft["payload"], T.BROADCAST_HEAD)
             await asyncio.sleep(0.05)                 # stay under Telegram's rate limits
-        await ctx.msg.user(admin_id, f"📢 Göndərildi: <b>{sent}</b>"
+        await ctx.msg.user(admin_id, f"📢 {T.BC_TARGETS[draft['target']]} — göndərildi: <b>{sent}</b>"
                            + (f" · çatdırılmadı: <b>{len(targets) - sent}</b>" if sent < len(targets) else ""))
     t = asyncio.create_task(job())
     ctx.tasks.add(t)
@@ -286,26 +301,68 @@ async def broadcast_go(c: CallbackQuery, ctx: Ctx):
 
 
 async def _relay(m: Message, ctx: Ctx, user, kind: str, payload: str):
-    """Text or photo typed by an admin while a message / broadcast dialogue is open."""
+    """Text or photo typed by an admin while a message / announcement dialogue is open."""
     admin_id, state = user["user_id"], user["state"]
-    if state == "adm_bc":
-        await ctx.db.kv_set(f"bc:{admin_id}", json.dumps({"kind": kind, "payload": payload}))
+    if state.startswith("adm_bc:"):
+        target = state.split(":")[1]
+        await ctx.db.kv_set(f"bc:{admin_id}", json.dumps({"kind": kind, "payload": payload, "target": target}))
         await ctx.db.set_state(admin_id, None)
         preview = "🖼 Şəkil" + (f": {payload.partition('|')[2][:300]}" if payload.partition("|")[2] else "") \
             if kind == "photo" else payload[:600]
-        n = len(await ctx.db.active_user_ids())
-        return await show(m, T.BROADCAST_CONFIRM.format(n=n, preview=preview),
-                          kb([("✅ Bəli, göndər", "a:bcy"), (T.BTN_NO, "a:home")]))
+        n = len(await _bc_ids(ctx, target))
+        return await show(m, T.BROADCAST_CONFIRM.format(n=n, target=T.BC_TARGETS[target], preview=preview),
+                          kb([("✅ Bəli, göndər", "a:bcy"), (T.BTN_NO, "a:bc")]))
     uid = int(state.split(":")[1])
     await ctx.db.set_state(admin_id, None)
     ok = await ctx.msg.deliver(uid, kind, payload, T.FROM_ADMIN)
-    await ctx.db.add_audit(admin_id, "message_user", uid, kind)
+    await ctx.db.add_audit(admin_id, "message_user", uid, "şəkil" if kind == "photo" else "mətn")
     await _card(m, ctx, uid, "✅ Göndərildi." if ok else "⚠️ Çatdırılmadı (istifadəçi botu bloklamış ola bilər).")
+
+
+# ------------------------------------------------------------------ plan limits
+@router.callback_query(F.data == "a:lim")
+async def limits(c: CallbackQuery, ctx: Ctx, note: str = ""):
+    await show(c, (note + "\n\n" if note else "") + T.limits_screen(),
+               kb([(f"⚙️ {PLANS[k].title}", f"a:lm:{k}") for k in ORDER], nav("a:home")))
+
+
+@router.callback_query(F.data.startswith("a:lm:"))
+async def limits_plan(c: CallbackQuery, ctx: Ctx):
+    key = c.data.split(":")[2]
+    if key not in PLANS:
+        return await ack(c)
+    p = PLANS[key]
+    await show(c, f"⚙️ <b>{p.title}</b>\n\nSaatlıq elan limiti: <b>{p.ads_per_hour}</b>\nMaksimum link sayı: <b>{p.max_links}</b>",
+               kb([("📨 Saatlıq elan limiti", f"a:lf:{key}:ads_per_hour")], [("🔗 Link sayı", f"a:lf:{key}:max_links")],
+                  nav("a:lim")))
+
+
+@router.callback_query(F.data.startswith("a:lf:"))
+async def limits_field(c: CallbackQuery, ctx: Ctx):
+    _, _, key, field = c.data.split(":")
+    if key not in PLANS or field not in LIMIT_RANGE:
+        return await ack(c)
+    lo, hi = LIMIT_RANGE[field]
+    await ctx.db.set_state(c.from_user.id, f"adm_lim:{key}:{field}")
+    await show(c, T.LIMITS_ASK[field].format(plan=PLANS[key].title, lo=lo, hi=hi), kb([(T.BTN_CANCEL, f"a:lm:{key}")]))
+
+
+async def _limit_input(m: Message, ctx: Ctx, user, key: str, field: str):
+    lo, hi = LIMIT_RANGE[field]
+    old = getattr(PLANS[key], field)
+    try:
+        await set_limit(ctx.db, key, field, int(m.text.strip()))
+    except ValueError:
+        return await show(m, T.LIMITS_BAD.format(lo=lo, hi=hi), kb([(T.BTN_CANCEL, f"a:lm:{key}")]))
+    await ctx.db.set_state(user["user_id"], None)
+    await ctx.db.add_audit(user["user_id"], "set_limit", None, f"{key}.{field}: {old} -> {getattr(PLANS[key], field)}")
+    await show(m, "✅ Limit yeniləndi.\n\n" + T.limits_screen(),
+               kb([(f"⚙️ {PLANS[k].title}", f"a:lm:{k}") for k in ORDER], nav("a:home")))
 
 
 @router.message(AdminState(), F.photo)
 async def admin_photo(m: Message, ctx: Ctx, user):
-    if user["state"].startswith(("adm_msg:", "adm_bc")):
+    if user["state"].startswith(("adm_msg:", "adm_bc:")):
         return await _relay(m, ctx, user, "photo", f"{m.photo[-1].file_id}|{T.esc(m.caption or '')}")
     await show(m, "Burada şəkil qəbul olunmur — mətn göndərin.", kb([(T.BTN_CANCEL, "a:home")]))
 
@@ -315,6 +372,8 @@ async def admin_text(m: Message, ctx: Ctx, user):
     parts = user["state"].split(":")
     if parts[0] == "adm_date":
         return await _date_input(m, ctx, user, parts[1], int(parts[2]))
+    if parts[0] == "adm_lim":
+        return await _limit_input(m, ctx, user, parts[1], parts[2])
     if parts[0] == "adm_note":
         uid = int(parts[1])
         note = None if m.text.strip() == "-" else m.text.strip()[:300]
@@ -357,10 +416,11 @@ async def reactivate(c: CallbackQuery, ctx: Ctx):
 async def user_links(c: CallbackQuery, ctx: Ctx):
     uid = _uid(c)
     links = await ctx.db.user_links(uid)
-    lines = [f"{i}. <code>{T.show_url(l['url'], 350)}</code>" + (f"\n   ⚠️ {T.esc(l['last_error'])}" if l["last_error"] else "")
+    lines = [f"{i}. {T.link_anchor(i, l['url'])}" + (f" — ⚠️ {T.esc(l['last_error'])}" if l["last_error"] else "")
              for i, l in enumerate(links, 1)]
-    rows = [[(f"🗑 {i}. {T.short_url(l['url'], 30)}", f"a:ld:{l['id']}")] for i, l in enumerate(links, 1)]
-    await show(c, "🔗 <b>İstifadəçinin linkləri</b>\n\n" + ("\n".join(lines) or "Link yoxdur."),
+    rows = [[(f"🗑 Link {i}", f"a:ld:{l['id']}")] for i, l in enumerate(links, 1)]
+    await show(c, "🔗 <b>İstifadəçinin linkləri</b>\n\n" + ("\n".join(lines) + "\n\nLinki açmaq üçün adına toxunun."
+                                                            if lines else "Link yoxdur."),
                kb(*rows, nav(f"a:u:{uid}")))
 
 
@@ -433,8 +493,9 @@ async def health(c: CallbackQuery, ctx: Ctx):
 @router.callback_query(F.data == "a:audit")
 async def audit(c: CallbackQuery, ctx: Ctx):
     rows = await ctx.db.recent_audit(15)
-    text = "📜 <b>Audit (son 15)</b>\n\n" + ("\n".join(
-        f"• {T.fmt_dt(r['ts'], ctx.cfg.timezone)} admin <code>{r['admin_id']}</code> — {T.esc(r['action'])}"
+    text = "📜 <b>Əməliyyat jurnalı (son 15)</b>\n\n" + ("\n".join(
+        f"• {T.fmt_dt(r['ts'], ctx.cfg.timezone)} admin <code>{r['admin_id']}</code> — "
+        f"{T.esc(T.AUDIT_NAMES.get(r['action'], r['action']))}"
         f" → <code>{r['target_user'] or '—'}</code> {T.esc((r['details'] or '')[:80])}" for r in rows) or "Boşdur.")
     await show(c, text[:4000], kb(nav("a:home")))
 

@@ -11,7 +11,8 @@ esc = html.escape
 
 BTN_HOME, BTN_BACK = "🏠 Ana səhifə", "⬅️ Geri"
 BTN_STATUS, BTN_LINKS, BTN_SUBS, BTN_HELP = "📊 Statusum", "🔗 Linklərim", "💎 Abunəlik", "ℹ️ Kömək"
-BTN_ADMIN = "🛠 Admin panel"
+BTN_ADMIN = "🛠 Admin paneli"
+BTN_PHONE = "📱 Nömrəmi paylaş"
 BTN_CONTACT = "✉️ Əlaqə"
 BTN_ADD_LINK, BTN_EDIT, BTN_DELETE = "➕ Link əlavə et", "✏️ Dəyiş", "🗑 Sil"
 BTN_YES, BTN_NO, BTN_CANCEL = "✅ Bəli", "❌ Xeyr", "❌ Ləğv et"
@@ -83,12 +84,12 @@ CONTACT_ASK = ("✉️ <b>Əlaqə</b>\n\nSualınızı, probleminizi və ya ödə
                "adminə çatdıracam. <b>Şəkil də göndərə bilərsiniz.</b>")
 CONTACT_SENT = "✅ Mesajınız adminə göndərildi."
 ADMIN_MSG_ASK = "Bu istifadəçiyə göndəriləcək mesajı yazın (mətn və ya şəkil):"
-BROADCAST_ASK = "📢 <b>Hamıya mesaj</b>\nAktiv istifadəçi sayı: <b>{n}</b>\n\nGöndəriləcək mesajı yazın (mətn və ya şəkil):"
-BROADCAST_CONFIRM = "Bu mesaj <b>{n}</b> aktiv istifadəçiyə göndərilsin?\n\n{preview}"
+BROADCAST_ASK = "📢 <b>{target}</b>\nAlacaq istifadəçi sayı: <b>{n}</b>\n\nGöndəriləcək elanı yazın (mətn və ya şəkil):"
+BROADCAST_CONFIRM = "Bu elan <b>{n}</b> istifadəçiyə göndərilsin? ({target})\n\n{preview}"
 NOTE_ASK = "Bu istifadəçi haqqında qeydi yazın (silmək üçün <code>-</code> göndərin):"
 FROM_ADMIN = "✉️ <b>Admindən mesaj</b>\n\n"
 BROADCAST_HEAD = "📢 <b>Admindən elan</b>\n\n"
-ACTION_NAMES = {"/start": "Start", "m:home": "Ana səhifə", "m:status": "Statusum", "m:links": "Linklərim",
+ACTION_NAMES = {"/start": "Başlanğıc (/start)", "phone": "Nömrə paylaşıldı", "m:home": "Ana səhifə", "m:status": "Statusum", "m:links": "Linklərim",
                 "m:subs": "Abunəlik", "m:help": "Kömək", "m:contact": "Əlaqə", "l:add": "Link əlavə et",
                 "l:v": "Linkə baxış", "l:e": "Link dəyiş", "l:d": "Link sil", "s:p": "Plan seçimi",
                 "s:c": "Abunəlik sorğusu", "contact": "Adminə mesaj", "link_added": "Link əlavə olundu"}
@@ -120,7 +121,8 @@ def status_card(u, n_links, sent_hour, queued, tz) -> str:
              f"📅 Bitmə tarixi: {fmt_dt(u['expires_at'], tz)}",
              f"🔗 Linklər: {n_links} / {p.max_links if p else 0}",
              f"📨 Son 1 saatda göndərilən: {sent_hour} / {limit}",
-             f"📭 Qalan saatlıq limit: {max(0, limit - sent_hour)}"]
+             f"📭 Qalan saatlıq limit: {max(0, limit - sent_hour)}",
+             f"📞 Telefon: {esc(u['phone']) if u['phone'] else '—'}"]
     if queued:
         lines.append(f"🕒 Növbədə gözləyən elan: {queued}")
     if u["requested_plan"]:
@@ -148,15 +150,23 @@ def request_sent(plan_key, payment_info) -> str:
     return t + (f"\n\n💳 {esc(payment_info)}" if payment_info else "")
 
 
+def link_anchor(n, url) -> str:
+    """Clickable short name of a link: 'Link 1'."""
+    return f'<a href="{esc(url, quote=True)}">Link {n}</a>'
+
+
 def links_screen(links, max_links) -> str:
     if not links:
         return f"🔗 <b>Linklərim</b> (0 / {max_links})\n\nHələ link əlavə etməmisiniz."
-    return (f"🔗 <b>Linklərim</b> ({len(links)} / {max_links})\n\n"
-            "Baxmaq, dəyişmək və ya silmək üçün linki seçin:")
+    rows = "\n".join(f"{i}. {link_anchor(i, l['url'])} — <code>{esc(short_url(l['url'], 34))}</code>"
+                     for i, l in enumerate(links, 1))
+    return (f"🔗 <b>Linklərim</b> ({len(links)} / {max_links})\n\n{rows}\n\n"
+            "Baxmaq, dəyişmək və ya silmək üçün aşağıdan linki seçin:")
 
 
 def link_card(n, url, created, tz, paused=False) -> str:
-    t = f"🔗 <b>Link {n}</b>\n\n<code>{show_url(url)}</code>\n\nƏlavə olunub: {fmt_dt(created, tz)}"
+    t = (f"🔗 <b>Link {n}</b> — {link_anchor(n, url).replace(f'Link {n}', 'Bina.az-da aç')}\n\n"
+         f"<code>{show_url(url)}</code>\n\nƏlavə olunub: {fmt_dt(created, tz)}")
     return t + ("\n\n⏸ Bu link cari planın limitindən kənardadır və izlənmir." if paused else "")
 
 
@@ -244,6 +254,8 @@ def admin_request(u) -> str:
 
 def admin_user_card(u, n_links, sent_hour, queued, tz) -> str:
     return (f"👤 {user_line(u)}\n\n"
+            f"İstifadəçi adı: {('@' + esc(u['username'])) if u['username'] else '—'}\n"
+            f"Telefon: {esc(u['phone']) if u['phone'] else '— (paylaşmayıb)'}\n"
             f"Status: {STATUS.get(u['status'], u['status'])}\nPlan: {plan_title(u['plan'])}\n"
             f"Sorğu: {plan_title(u['requested_plan']) if u['requested_plan'] else '—'}\n"
             f"Qeydiyyat: {fmt_dt(u['registered_at'], tz)}\n"
@@ -251,6 +263,45 @@ def admin_user_card(u, n_links, sent_hour, queued, tz) -> str:
             f"Linklər: {n_links}\nSon 1 saatda göndərilən: {sent_hour}\nNövbədə: {queued}"
             + ("\n🚫 İstifadəçi botu bloklayıb" if u["blocked_bot"] else "")
             + (f"\n📝 Qeyd: {esc(u['note'])}" if u["note"] else ""))
+
+
+def admin_users_list(users, link_counts, start, tz) -> str:
+    """Details of one page of users, as text (the buttons under it open a user)."""
+    out = []
+    for i, u in enumerate(users, start + 1):
+        out.append(
+            f"<b>{i}. {esc(u['first_name'] or '—')}</b>"
+            + (f" — @{esc(u['username'])}" if u["username"] else " — istifadəçi adı yoxdur")
+            + f"\n🆔 <code>{u['user_id']}</code> · {STATUS.get(u['status'], u['status'])} · {plan_title(u['plan'])}"
+            + f"\n📞 {esc(u['phone']) if u['phone'] else '—'} · 🔗 {link_counts.get(u['user_id'], 0)} link"
+            + f"\n📅 Qeydiyyat: {fmt_dt(u['registered_at'], tz, False)} · Bitmə: {fmt_dt(u['expires_at'], tz, False)}"
+            + (f"\n⏳ Sorğu: {plan_title(u['requested_plan'])}" if u["requested_plan"] else "")
+            + (f"\n📝 {esc(u['note'])}" if u["note"] else ""))
+    return "\n\n".join(out) or "İstifadəçi yoxdur."
+
+
+def user_button(u) -> str:
+    return (f"@{u['username']}" if u["username"] else (u["first_name"] or "—")) + f" · {u['user_id']}"
+
+
+PHONE_SAVED = "✅ Telefon nömrəniz yadda saxlandı."
+PHONE_NOT_OWN = "Yalnız öz Telegram nömrənizi «📱 Nömrəmi paylaş» düyməsi ilə paylaşa bilərsiniz."
+BC_TARGETS = {"all": "Bütün aktiv istifadəçilər", "basic": "Basic istifadəçilər", "pro": "Pro istifadəçilər",
+              "platinum": "Platinum istifadəçilər"}
+BC_MENU = "📢 <b>Elan göndər</b>\n\nElanı kimə göndərmək istəyirsiniz?"
+BC_EMPTY = "Bu qrupda aktiv istifadəçi yoxdur."
+LIMITS_ASK = {"ads_per_hour": "<b>{plan}</b> planı üçün saatlıq elan limitini yazın ({lo}–{hi}):",
+              "max_links": "<b>{plan}</b> planı üçün maksimum link sayını yazın ({lo}–{hi}):"}
+LIMITS_BAD = "Düzgün rəqəm yazın ({lo}–{hi})."
+AUDIT_NAMES = {"approve": "Təsdiq", "reject": "Rədd", "set_plan": "Plan dəyişdi", "set_expiry": "Müddət dəyişdi",
+               "suspend": "Dayandırıldı", "reactivate": "Yenidən aktiv", "reactivate_expired": "Aktiv edilmədi (müddət bitib)",
+               "delete_link": "Link silindi", "manual_cycle": "Əl ilə monitorinq", "message_user": "İstifadəçiyə mesaj",
+               "note": "Qeyd", "broadcast": "Elan göndərildi", "set_limit": "Plan limiti dəyişdi"}
+
+
+def limits_screen() -> str:
+    return ("⚙️ <b>Plan limitləri</b>\n\n" + plans_table()
+            + "\n\nDəyişmək istədiyiniz planı seçin. Dəyişiklik dərhal qüvvəyə minir.")
 
 
 ASK_DATE = "Bitmə tarixini yazın (format: <code>GG.AA.İİİİ</code>, məs. <code>31.12.2026</code>):"

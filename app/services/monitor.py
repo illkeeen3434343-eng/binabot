@@ -126,7 +126,7 @@ class Monitor:
                         await self.alerts.error("Bina.az", "network", f"Bina.az-a qoşulmaq olmadı: {e}")
                     except SchemaError as e:
                         res["failed"] += 1
-                        res["note"] = "schema"
+                        res["note"] = "struktur"
                         await self.db.search_result(search["id"], False, str(e))
                         await self.db.kv_set("bina_unhealthy", 1)
                         await self.alerts.error("Bina.az", "schema",

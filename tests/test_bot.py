@@ -40,7 +40,9 @@ class FakeSession(BaseSession):
             return True
         if isinstance(method, (SendMessage, EditMessageText, SendPhoto)):
             text = getattr(method, "text", None) or getattr(method, "caption", None)
-            assert len(text) <= (1024 if isinstance(method, SendPhoto) else 4096), "Telegram would refuse this"
+            import html as _h, re as _re                     # Telegram counts the text AFTER parsing entities
+            visible = _h.unescape(_re.sub(r"<[^>]+>", "", text))
+            assert len(visible) <= (1024 if isinstance(method, SendPhoto) else 4096), "Telegram would refuse this"
             kind = "photo" if isinstance(method, SendPhoto) else "text"
             self.out.append((int(method.chat_id), text, method.reply_markup, kind))
             return Message(message_id=self._id, date=dt.datetime.now(), chat=Chat(id=int(method.chat_id), type="private"), text=text)
@@ -79,6 +81,13 @@ class Tg:
             "id": str(self.n), "from": self._user(uid), "chat_instance": "x", "data": data,
             "message": {"message_id": 1, "date": int(time.time()), "chat": {"id": uid, "type": "private"},
                         "from": {"id": 999, "is_bot": True, "first_name": "bot"}, "text": "old"}}}))
+        return self.last(uid)
+
+    async def contact(self, uid, phone, owner=None):
+        self.n += 1
+        await self.dp.feed_update(self.bot, Update.model_validate({"update_id": self.n, "message": {
+            "message_id": self.n, "date": int(time.time()), "chat": {"id": uid, "type": "private"},
+            "from": self._user(uid), "contact": {"phone_number": phone, "first_name": "x", "user_id": owner or uid}}}))
         return self.last(uid)
 
     async def photo(self, uid, caption=None):
@@ -158,7 +167,7 @@ async def test_full_scenario_start_to_notifications(tg):
     u = await db.get_user(U1)
     assert (u["username"], u["first_name"], u["status"]) == ("user100", "Ad100", "new") and u["registered_at"]
     assert "Necə başlamaq olar" in tg.all(U1)[0]
-    assert tg.keys(U1) == tg.shown_keys(U1) == [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_CONTACT, T.BTN_HELP]
+    assert tg.shown_keys(U1) == [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_CONTACT, T.BTN_HELP, T.BTN_PHONE]
     await tg.text(ADMIN, "/start"); assert tg.keys(ADMIN)[-1] == T.BTN_ADMIN          # admins only
     # --- cannot add links before activation
     await tg.click(U1, "m:links")
@@ -275,7 +284,7 @@ async def test_admin_user_management_and_audit(tg):
     assert "Admin panel" in await tg.text(ADMIN, "/admin") and "⏳ Sorğular (1)" in tg.labels(ADMIN)
     await tg.click(ADMIN, "a:pend"); assert f"a:u:{U2}" in tg.buttons(ADMIN)
     await tg.click(ADMIN, "a:home"); await tg.click(ADMIN, "a:us:0")
-    assert {f"a:u:{U1}", f"a:u:{U2}", f"a:u:{ADMIN}"} <= set(tg.buttons(ADMIN))
+    assert {f"a:u:{U1}", f"a:u:{U2}", f"a:u:{ADMIN}"} <= set(tg.inline(ADMIN))
     # reject
     await tg.click(ADMIN, f"a:u:{U2}"); await tg.click(ADMIN, f"a:rj:{U2}")
     assert (await db.get_user(U2))["status"] == "rejected" and tg.last(U2) == T.REJECTED
@@ -317,7 +326,7 @@ async def test_admin_user_management_and_audit(tg):
     assert "Sistem vəziyyəti" in await tg.click(ADMIN, "a:health")
     await tg.click(ADMIN, "a:home")
     log = await tg.click(ADMIN, "a:audit")
-    for action in ("approve", "reject", "set_plan", "set_expiry", "suspend", "reactivate", "delete_link"):
+    for action in ("Təsdiq", "Rədd", "Plan dəyişdi", "Müddət dəyişdi", "Dayandırıldı", "Yenidən aktiv", "Link silindi"):
         assert action in log, action
     await tg.click(ADMIN, "a:home"); await tg.click(ADMIN, "a:run")
     for t in list(env.ctx.tasks):
@@ -395,11 +404,11 @@ async def test_keyboard_area_shows_only_the_current_screens_buttons(tg):
     await approve(tg, U1, "pro"); await tg.text(U1, LINK2)
     lid = (await db.user_links(U1))[0]["id"]
     await tg.text(U1, "/start")
-    home = [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_CONTACT, T.BTN_HELP]
+    home = [T.BTN_STATUS, T.BTN_LINKS, T.BTN_SUBS, T.BTN_CONTACT, T.BTN_HELP, T.BTN_PHONE]
     assert tg.shown_keys(U1) == home                                # no Geri / Ana səhifə on the main menu
     n = len(tg.s.out)
     assert "Linklərim" in await tg.key(U1, T.BTN_LINKS) and len(tg.s.out) == n + 1   # new message at the bottom
-    assert tg.shown_keys(U1) == ["1. baki/alqi-satqi/menziller?has_bill_of…", T.BTN_ADD_LINK, T.BTN_BACK]
+    assert tg.shown_keys(U1) == ["🔗 Link 1", T.BTN_ADD_LINK, T.BTN_BACK]
     assert T.BTN_STATUS not in tg.keys(U1)                          # previous menu is gone
     await tg.click(U1, f"l:v:{lid}")
     assert tg.shown_keys(U1) == [T.BTN_EDIT, T.BTN_DELETE, T.BTN_BACK, T.BTN_HOME]   # deeper: both appear
@@ -422,12 +431,12 @@ async def test_keyboard_area_shows_only_the_current_screens_buttons(tg):
     assert (await tg.text(U1, "/cancel")).startswith(T.CANCELLED) and (await db.get_user(U1))["state"] is None
     # admin panel lives in the keyboard area too; a non-admin typing its label gets nothing
     await tg.text(ADMIN, "/start")
-    assert "Admin panel" in await tg.key(ADMIN, T.BTN_ADMIN) and "📢 Hamıya mesaj" in tg.shown_keys(ADMIN)
+    assert "Admin paneli" in await tg.key(ADMIN, T.BTN_ADMIN) and "📢 Elan göndər" in tg.shown_keys(ADMIN)
     assert (await tg.text(U1, T.BTN_ADMIN)).startswith(T.UNKNOWN_INPUT)
     await tg.click(ADMIN, "a:us:0"); await tg.click(ADMIN, f"a:u:{U1}"); await tg.click(ADMIN, f"a:ex:{U1}")
     await tg.click(ADMIN, f"a:esc:{U1}")
     assert f"[<code>{U1}</code>]" in await tg.key(ADMIN, T.BTN_CANCEL)
-    assert "İstifadəçilər" in await tg.key(ADMIN, T.BTN_BACK) and "Admin panel" in await tg.key(ADMIN, T.BTN_BACK)
+    assert "istifadəçini seçin" in await tg.key(ADMIN, T.BTN_BACK) and "Admin paneli" in await tg.key(ADMIN, T.BTN_BACK)
 
 
 async def test_contact_admin_reply_note_and_broadcast(tg):
@@ -455,17 +464,30 @@ async def test_contact_admin_reply_note_and_broadcast(tg):
     # broadcast: draft -> confirmation -> every ACTIVE user, nobody else
     await db.set_status(U2, "suspended")
     await tg.click(ADMIN, "a:us:0"); await tg.click(ADMIN, "a:home"); await tg.click(ADMIN, "a:bc")
+    assert tg.labels(ADMIN)[:4] == ["📢 Bütün aktiv istifadəçilər", "📢 Basic istifadəçilər", "📢 Pro istifadəçilər",
+                                    "📢 Platinum istifadəçilər"]
+    assert await tg.click(ADMIN, "a:bct:platinum") == T.BC_EMPTY     # nobody on Platinum
+    await tg.click(ADMIN, "a:bc"); await tg.click(ADMIN, "a:bct:all")
     n = len(tg.s.out)
-    assert "1</b> aktiv istifadəçiyə" in await tg.text(ADMIN, "Sabah texniki fasilə olacaq")
+    assert "<b>1</b> istifadəçiyə" in await tg.text(ADMIN, "Sabah texniki fasilə olacaq")
     assert all(o[0] == ADMIN for o in tg.s.out[n:])                  # nothing sent before confirming
     await tg.click(ADMIN, "a:bcy")
     for t in list(tg.env.ctx.tasks):
         await t
     assert tg.last(U1) == T.BROADCAST_HEAD + "Sabah texniki fasilə olacaq" and "Sabah" not in tg.last(U2)
-    assert "Göndərildi: <b>1</b>" in tg.last(ADMIN)
+    assert "göndərildi: <b>1</b>" in tg.last(ADMIN)
+    # an announcement for one plan reaches only that plan's active users
+    await db.set_status(U2, "active"); await db.set_user(U2, plan="pro")
+    await tg.click(ADMIN, "a:bc"); await tg.click(ADMIN, "a:bct:pro")
+    assert "Pro istifadəçilər" in await tg.text(ADMIN, "Pro üçün yenilik")
+    await tg.click(ADMIN, "a:bcy")
+    for t in list(tg.env.ctx.tasks):
+        await t
+    assert tg.last(U2) == T.BROADCAST_HEAD + "Pro üçün yenilik" and "Pro üçün" not in tg.last(U1)
     await tg.press(ADMIN, "a:bcy")                                   # pressing again sends nothing
     assert not tg.env.ctx.tasks
-    for forbidden in (f"a:msg:{U1}", f"a:nt:{U1}", "a:bc", "a:bcy"):
+    await db.set_status(U2, "suspended")
+    for forbidden in (f"a:msg:{U1}", f"a:nt:{U1}", "a:bc", "a:bct:all", "a:bcy", "a:lim", "a:lf:basic:ads_per_hour"):
         await tg.press(U2, forbidden); assert tg.s.alerts == [T.NO_ACCESS]
     actions = [r["action"] for r in await db.recent_audit(20)]
     assert {"message_user", "note", "broadcast"} <= set(actions)
@@ -484,3 +506,62 @@ async def test_old_database_is_migrated(tmp_path):
     d = await Database(p).open()
     assert (await d.get_user(5))["note"] is None and (await d.get_user(5))["username"] == "u"
     await d.close()
+
+
+async def test_admin_changes_plan_limits_from_telegram(tg):
+    from app import plans
+    env, db = tg.env, tg.env.db
+    await approve(tg, U1, "basic"); await add_link(tg, U1, URL_A)
+    await tg.text(ADMIN, "/start"); await tg.key(ADMIN, T.BTN_ADMIN)
+    assert "Basic</b> — 1 link, saatda maksimum 10 elan" in await tg.click(ADMIN, "a:lim")
+    await tg.click(ADMIN, "a:lm:basic"); await tg.click(ADMIN, "a:lf:basic:ads_per_hour")
+    assert "Düzgün rəqəm" in await tg.text(ADMIN, "çox")
+    assert "Düzgün rəqəm" in await tg.text(ADMIN, "0")
+    assert "Basic</b> — 1 link, saatda maksimum 3 elan" in await tg.text(ADMIN, "3")
+    await tg.click(ADMIN, "a:lm:basic"); await tg.click(ADMIN, "a:lf:basic:max_links"); await tg.text(ADMIN, "2")
+    # the new limits are what the user sees and what delivery enforces
+    await tg.text(U1, "/start")
+    card = await tg.key(U1, T.BTN_STATUS)
+    assert "Linklər: 1 / 2" in card and "0 / 3" in card
+    assert "Link əlavə olundu" in await tg.text(U1, URL_B)             # second link now allowed
+    env.http.feeds['"roomIds"'] = [[node(BASE + 1)]]; await env.mon.run_cycle()
+    env.http.feeds['"roomIds"'] = [[node(BASE + 10 + i) for i in range(6)] + [node(BASE + 1)]]; await env.mon.run_cycle()
+    assert await env.disp.dispatch_once() == 3 and await db.count_queued(U1) == 3
+    assert "3 elan/saat" in tg.last(U1)
+    # survives a restart, and is in the audit log
+    plans.reset_defaults(); assert plans.PLANS["basic"].ads_per_hour == 10
+    await plans.load_limits(db)
+    assert (plans.PLANS["basic"].ads_per_hour, plans.PLANS["basic"].max_links, plans.PLANS["pro"].ads_per_hour) == (3, 2, 25)
+    assert [r["details"] for r in await db.recent_audit(5) if r["action"] == "set_limit"] == [
+        "basic.max_links: 1 -> 2", "basic.ads_per_hour: 10 -> 3"]
+
+
+async def test_users_list_details_clickable_links_and_phone(tg):
+    db = tg.env.db
+    await approve(tg, U1, "pro"); await add_link(tg, U1, URL_A); await tg.text(U1, LONG[:4096]); await tg.text(U1, LONG[4096:])
+    # phone: only the user's OWN contact, shared with Telegram's button, is stored
+    await tg.text(U1, "/start")
+    assert (await tg.contact(U1, "994501112233", owner=U2)).startswith(T.PHONE_NOT_OWN)
+    assert (await db.get_user(U1))["phone"] is None
+    assert (await tg.contact(U1, "994501112233")).startswith(T.PHONE_SAVED)
+    assert (await db.get_user(U1))["phone"] == "+994501112233" and T.BTN_PHONE not in tg.shown_keys(U1)
+    assert "📞 Telefon: +994501112233" in await tg.key(U1, T.BTN_STATUS)
+    # user's own list: short clickable names
+    await tg.key(U1, T.BTN_BACK)
+    mine = await tg.key(U1, T.BTN_LINKS)
+    assert '<a href="https://bina.az/baki/alqi-satqi/menziller?room_ids%5B%5D=3">Link 1</a>' in mine and ">Link 2</a>" in mine
+    assert tg.shown_keys(U1)[:2] == ["🔗 Link 1", "🔗 Link 2"]
+    # admin: users page = details as text + one inline button per user
+    await tg.text(ADMIN, "/start"); await tg.key(ADMIN, T.BTN_ADMIN)
+    n = len(tg.s.out)
+    await tg.click(ADMIN, "a:us:0")
+    header, details = tg.s.out[n], tg.s.out[n + 1]
+    assert "İstifadəçilər" in header[1] and hasattr(header[2], "keyboard")
+    for part in ("Ad100</b> — @user100", f"<code>{U1}</code> · ✅ Aktiv · Pro", "📞 +994501112233 · 🔗 2 link"):
+        assert part in details[1], part
+    assert [b.text for row in details[2].inline_keyboard for b in row] == [f"@user{U1} · {U1}", f"@user{ADMIN} · {ADMIN}"]
+    card = await tg.click(ADMIN, f"a:u:{U1}")                       # opens as a new message
+    assert "İstifadəçi adı: @user100" in card and "Telefon: +994501112233" in card
+    links = await tg.click(ADMIN, f"a:ul:{U1}")
+    assert ">Link 1</a>" in links and ">Link 2</a>" in links and links.count("location_ids") == 200   # full URL only inside href
+    assert tg.shown_keys(ADMIN)[:2] == ["🗑 Link 1", "🗑 Link 2"]

@@ -112,7 +112,7 @@ class BinaClient:
 
     async def _get(self, url, params=None, headers=None) -> Response:
         """One polite request: global spacing; retries ONLY for network errors / 5xx."""
-        last = "no answer"
+        last = "cavab yoxdur"
         for attempt in range(self.retries + 1):
             async with self._lock:                       # serialises + spaces all requests
                 wait = self._last + self.min_interval - time.monotonic()
@@ -124,7 +124,7 @@ class BinaClient:
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:                   # timeout, DNS, reset ...
-                    r, last = None, f"network error: {e.__class__.__name__}"
+                    r, last = None, f"şəbəkə xətası: {e.__class__.__name__}"
                 finally:
                     self._last = time.monotonic()
             if r is not None:
@@ -153,7 +153,7 @@ class BinaClient:
         try:
             payload = r.json()
         except ValueError:
-            raise BinaUnavailable("answer was not JSON")
+            raise BinaUnavailable("cavab JSON deyil")
         return parse_search_payload(payload)
 
     async def search(self, flt: dict, max_pages: int, keep_going=None) -> list[Ad]:

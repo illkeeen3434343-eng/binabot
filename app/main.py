@@ -17,6 +17,7 @@ from .bot import admin, user
 from .bot.common import Ctx, RegisterMiddleware, nav_router
 from .config import load_config
 from .db import Database
+from .plans import load_limits
 from .services.alerts import Alerts
 from .services.dispatcher import Dispatcher
 from .services.jobs import Jobs
@@ -77,6 +78,7 @@ async def main():
     if not cfg.bot_token or not cfg.admin_ids:
         sys.exit("BOT_TOKEN and ADMIN_IDS must be set (see .env.example)")
     db = await Database(cfg.db_path).open()
+    await load_limits(db)                          # plan limits changed by an admin
     session = None
     if cfg.telegram_api_base:                      # self-hosted Bot API server (optional)
         from aiogram.client.session.aiohttp import AiohttpSession

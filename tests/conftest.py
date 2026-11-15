@@ -71,6 +71,8 @@ async def env(tmp_path):
     cfg = Config(db_path=str(tmp_path / "t.sqlite3"), admin_ids=frozenset({1}),
                  request_min_interval=0, send_delay=0, payment_info="Kart: 0000")
     db = await Database(cfg.db_path).open()
+    from app import plans
+    plans.reset_defaults()
     http = FakeHttp()
 
     async def nosleep(_):
