@@ -76,7 +76,7 @@ async def main():
         for _ in range(40):
             await asyncio.sleep(0.5)
             texts = [c[1].get("text", "") for c in calls if c[0] == "sendMessage"]
-            if any("Ana səhifə" in t for t in texts) and any("Xəta" in t for t in texts):
+            if any("Ana səhifə" in t for t in texts) and any("⚠️ <b>Xəta</b>" in t for t in texts):
                 break
     finally:
         proc.terminate()
@@ -94,7 +94,7 @@ async def main():
     print("admin alert    :", [t.replace("\n", " | ")[:110] for cid, t in sent if cid == "999"])
     print("errors table   :", errs, "| cycles:", cyc)
     print("clean shutdown :", "bot stopped" in out, "| exit code:", proc.returncode)
-    ok = (row == ("tester", "Ilkin", "new") and any(cid == "999" and "Xəta" in t for cid, t in sent)
+    ok = (row == ("tester", "Ilkin", "new") and any(cid == "999" and "⚠️ <b>Xəta</b>" in t for cid, t in sent)
           and errs and "bot stopped" in out)
     print("\nSMOKE TEST", "PASSED" if ok else "FAILED")
     if not ok:
